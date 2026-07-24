@@ -132,7 +132,41 @@ def test_check_reports_missing_instruction_metadata_without_writing(tmp_path: Pa
     assert result.returncode == 1
     assert not (project_path / "AGENTS.md").exists()
     report = json.loads(result.stdout)["project_list"][0]
-    assert report["missing_metadata_list"] == ["AGENTS.md", "Required Standards"]
+    assert report["missing_metadata_list"] == ["AGENTS.md", "Table Of Contents", "Required Standards"]
+
+
+def test_check_reports_table_of_contents_that_does_not_match_heading_order(tmp_path: Path) -> None:
+    """Instruction validation rejects an incomplete or reordered table of contents.
+
+    Args:
+        tmp_path: Isolated workspace parent.
+    """
+
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    _project_create(
+        workspace_root,
+        "invalid-instructions",
+        {
+            "AGENTS.md": (
+                "# Repository Guidelines\n\n"
+                "## Table Of Contents\n\n"
+                "- [Project Contract](#project-contract)\n"
+                "- [Required Standards](#required-standards)\n\n"
+                "## Required Standards\n\n"
+                "- `project-standards:project-foundation` applies repository-wide.\n"
+                "- `project-standards:project-instruction-developer` applies to instructions.\n\n"
+                "## Project Contract\n\n"
+                "Project-specific behavior remains local.\n"
+            )
+        },
+    )
+
+    result = _tool_run(workspace_root)
+
+    assert result.returncode == 1
+    report = json.loads(result.stdout)["project_list"][0]
+    assert report["missing_metadata_list"] == ["Table Of Contents"]
 
 
 def test_check_ignores_instruction_examples_and_string_fixtures(tmp_path: Path) -> None:
@@ -150,6 +184,8 @@ def test_check_ignores_instruction_examples_and_string_fixtures(tmp_path: Path) 
         {
             "AGENTS.md": (
                 "# Repository Guidelines\n\n"
+                "## Table Of Contents\n\n"
+                "- [Required Standards](#required-standards)\n\n"
                 "## Required Standards\n\n"
                 "- `project-standards:project-foundation` applies repository-wide.\n"
                 "- `project-standards:project-instruction-developer` applies to instructions.\n"
@@ -195,6 +231,8 @@ def test_check_reports_unavailable_declared_provider_skill(tmp_path: Path) -> No
         {
             "AGENTS.md": (
                 "# Repository Guidelines\n\n"
+                "## Table Of Contents\n\n"
+                "- [Required Standards](#required-standards)\n\n"
                 "## Required Standards\n\n"
                 "- `project-standards:project-foundation` applies repository-wide.\n"
                 "- `project-standards:project-instruction-developer` applies to instructions.\n"
@@ -226,6 +264,8 @@ def test_check_skips_tracked_files_deleted_from_worktree(tmp_path: Path) -> None
         {
             "AGENTS.md": (
                 "# Repository Guidelines\n\n"
+                "## Table Of Contents\n\n"
+                "- [Required Standards](#required-standards)\n\n"
                 "## Required Standards\n\n"
                 "- `project-standards:project-foundation` applies repository-wide.\n"
                 "- `project-standards:project-instruction-developer` applies to instructions.\n"
@@ -260,7 +300,16 @@ def test_write_preserves_project_overlay_and_rechecks_result(tmp_path: Path) -> 
     project_path = _project_create(
         workspace_root,
         "consumer",
-        {"AGENTS.md": ("# Consumer\n\n" "## Project Contract\n\n" "This exact local overlay must remain unchanged.\n")},
+        {
+            "AGENTS.md": (
+                "# Consumer\n\n"
+                "## Table Of Contents\n\n"
+                "- [Project Contract](#project-contract)\n"
+                "- [Required Standards](#required-standards)\n\n"
+                "## Project Contract\n\n"
+                "This exact local overlay must remain unchanged.\n"
+            )
+        },
     )
 
     result = _tool_run(workspace_root, "--write")
@@ -273,6 +322,26 @@ def test_write_preserves_project_overlay_and_rechecks_result(tmp_path: Path) -> 
     assert text.count("## Project Contract") == 1
     assert "`project-standards:project-foundation`" in text
     assert "`project-standards:project-instruction-developer`" in text
+
+
+def test_write_creates_complete_instruction_metadata_for_new_project(tmp_path: Path) -> None:
+    """Write mode creates a project instruction file that passes its own follow-up check.
+
+    Args:
+        tmp_path: Isolated workspace parent.
+    """
+
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    _project_create(workspace_root, "new-project", {"README.md": "# New project\n"})
+
+    write_result = _tool_run(workspace_root, "--write")
+    check_result = _tool_run(workspace_root)
+
+    assert write_result.returncode == 0
+    assert json.loads(write_result.stdout)["is_valid"] is True
+    assert check_result.returncode == 0
+    assert json.loads(check_result.stdout)["is_valid"] is True
 
 
 def test_write_refuses_multiple_worktrees_of_one_repository(tmp_path: Path) -> None:

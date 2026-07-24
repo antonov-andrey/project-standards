@@ -1,5 +1,11 @@
 # Repository Guidelines
 
+## Table Of Contents
+
+- [Required Standards](#required-standards)
+- [Project Contract](#project-contract)
+- [Commands](#commands)
+
 ## Required Standards
 
 - `project-standards:project-foundation` applies to all work in this repository.

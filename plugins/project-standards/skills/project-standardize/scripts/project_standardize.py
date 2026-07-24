@@ -16,6 +16,7 @@ PLUGIN_NAME = "project-standards"
 REQUIRED_HEADING = "## Required Standards"
 STANDARD_SKILL_ROOT = Path(__file__).resolve().parents[2]
 STRUCTURED_CONFIG_SUFFIX_SET = {".json", ".yaml", ".yml"}
+TABLE_OF_CONTENTS_HEADING = "## Table Of Contents"
 
 
 @dataclass(frozen=True)
@@ -121,6 +122,21 @@ def _git_output_get(project_path: Path, argument_list: list[str]) -> str:
     ).stdout.strip()
 
 
+def _heading_anchor_get(heading: str) -> str:
+    """Return the canonical table-of-contents anchor for one heading.
+
+    Args:
+        heading: Literal Markdown heading text.
+
+    Returns:
+        Lowercase anchor with spaces converted to hyphens and punctuation removed.
+    """
+
+    return "".join(
+        "-" if character == " " else character.lower() if character.isalnum() else "" for character in heading
+    )
+
+
 def _missing_metadata_list_get(agents_path: Path) -> list[str]:
     """Return missing root instruction metadata identifiers.
 
@@ -132,11 +148,14 @@ def _missing_metadata_list_get(agents_path: Path) -> list[str]:
     """
 
     if not agents_path.is_file():
-        return ["AGENTS.md", "Required Standards"]
+        return ["AGENTS.md", "Table Of Contents", "Required Standards"]
     text = agents_path.read_text(encoding="utf-8")
+    missing_metadata_list: list[str] = []
+    if not _table_of_contents_is_valid(text):
+        missing_metadata_list.append("Table Of Contents")
     if re.search(r"(?m)^## Required Standards\s*$", text) is None:
-        return ["Required Standards"]
-    return []
+        missing_metadata_list.append("Required Standards")
+    return missing_metadata_list
 
 
 def _project_path_list_get(workspace_root: Path) -> list[Path]:
@@ -308,7 +327,13 @@ def _required_standard_write(report: ProjectReport) -> None:
         for standard in report.missing_standard_list
     )
     if not agents_path.exists():
-        agents_path.write_text(f"# Repository Guidelines\n\n{REQUIRED_HEADING}\n\n{entry_text}", encoding="utf-8")
+        agents_path.write_text(
+            (
+                f"# Repository Guidelines\n\n{TABLE_OF_CONTENTS_HEADING}\n\n"
+                f"- [Required Standards](#required-standards)\n\n{REQUIRED_HEADING}\n\n{entry_text}"
+            ),
+            encoding="utf-8",
+        )
         return
     text = agents_path.read_text(encoding="utf-8")
     heading_match = re.search(r"(?m)^## Required Standards\s*$", text)
@@ -322,6 +347,36 @@ def _required_standard_write(report: ProjectReport) -> None:
     prefix = text[:insert_index].rstrip()
     suffix = text[insert_index:].lstrip()
     agents_path.write_text(f"{prefix}\n{entry_text}\n{suffix}", encoding="utf-8")
+
+
+def _table_of_contents_is_valid(text: str) -> bool:
+    """Return whether one root instruction file has its exact canonical table of contents.
+
+    Args:
+        text: Complete root instruction text.
+
+    Returns:
+        Whether the table of contents is first and matches every later level-two and level-three heading.
+    """
+
+    root_heading_match = re.match(r"^# [^\n]+\n", text)
+    table_heading_match = re.search(rf"(?m)^{re.escape(TABLE_OF_CONTENTS_HEADING)}[ \t]*$", text)
+    if root_heading_match is None or table_heading_match is None:
+        return False
+    if text[root_heading_match.end() : table_heading_match.start()].strip():
+        return False
+    next_heading_match = re.search(r"(?m)^## (?!Table Of Contents[ \t]*$)", text[table_heading_match.end() :])
+    if next_heading_match is None:
+        return False
+    section_end = table_heading_match.end() + next_heading_match.start()
+    actual_entry_list = [line for line in text[table_heading_match.end() : section_end].splitlines() if line.strip()]
+    later_text = text[section_end:]
+    expected_entry_list = []
+    for heading_match in re.finditer(r"(?m)^(##|###) (.+?)[ \t]*$", later_text):
+        marker, heading = heading_match.groups()
+        indent = "" if marker == "##" else "  "
+        expected_entry_list.append(f"{indent}- [{heading}](#{_heading_anchor_get(heading)})")
+    return actual_entry_list == expected_entry_list
 
 
 def _workspace_report_get(workspace_root: Path) -> tuple[list[ProjectReport], list[str]]:
