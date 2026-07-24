@@ -1,0 +1,33 @@
+{
+  "name": "project-standards",
+  "version": "0.1.0+codex.20260724000000",
+  "description": "Opinionated cross-domain project engineering standards, selection, and audit workflows.",
+  "author": {
+    "name": "Andrey Antonov",
+    "url": "https://github.com/antonov-andrey"
+  },
+  "repository": "https://github.com/antonov-andrey/project-standards",
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "project-standards",
+    "engineering"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Project Standards",
+    "shortDescription": "Apply reusable engineering standards consistently.",
+    "longDescription": "Project Standards provides independently selectable capability contracts for project structure, instructions, documentation, Python, APIs, persistence, frontend, deployment, standardization, and semantic audit.",
+    "developerName": "Andrey Antonov",
+    "category": "DeveloperTools",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Classify the standards required by this project.",
+      "Audit this project against its required standards.",
+      "Apply the relevant project engineering standard."
+    ]
+  }
+}

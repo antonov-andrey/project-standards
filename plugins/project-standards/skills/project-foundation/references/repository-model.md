@@ -1,0 +1,36 @@
+# Repository Model
+
+- `Main project`
+  - Meaning: the aggregate repository project entity for the whole repository root.
+  - Membership: it includes `Main project code`, `Main project AGENTS.md`, `Main project documentation`, root `test`, root `tool`, `Submodule`, every other project-local entity declared by applicable provider or project-local instructions, and other project-local assets such as `.codex/config.toml`, `log/**`, `Legacy`, data files, images, and text artifacts.
+  - Aggregate role: `Main project` is the umbrella project term for the full repository and its member entities, not a replacement for the local ownership of those member entities.
+- `Main project code`
+  - Meaning: the main root-repository code entity for runtime and business logic.
+  - Membership: it includes product backend code, product frontend code, product deployment configuration, reusable library code, persisted-entity code, script-family code, and root entrypoints when those entrypoints are runtime or business wrappers rather than standalone support utilities.
+  - Exclusions: it does not include `Main project AGENTS.md`, `Main project documentation`, `Skill`, `Submodule`, `test`, `tool`, or `Legacy`, including thin root Python entrypoints whose implementation owner is `Legacy`.
+  - Rule composition: it follows the shared `Code` layer, applicable capability skills selected through `External Standard Reference Rules`, and explicitly authorized project-local specializations within their declared scope.
+- `Self-contained`
+  - Meaning: the entity owns its own private files and local assets within its own boundary.
+  - Duplication boundary: duplication of code, instructions, tooling, tests, templates, or other owned assets across `Self-contained` entities is forbidden.
+  - Shared-owner rule: when multiple `Self-contained` entities need the same long-lived asset or contract, promote it to one canonical owner instead of cloning it across entities.
+- `log`
+  - Meaning: the runtime log root family.
+  - Root owner: `log/**` in the root repository.
+  - Centralization rule: `Submodule` runs executed through the project centralize logs there.
+  - Boundary: standalone `Submodule` logging belongs to the standalone `Submodule` contract.
+- `Code`
+  - Meaning: the shared code-rule layer composed from every applicable code capability skill selected through `External Standard Reference Rules`.
+  - Scope relation: `Code` is the common rule layer beneath owner-specific specializations such as `Main project code`, `Submodule code`, `test`, and `tool`; it does not replace the local ownership of those entities.
+  - Ownership: each selected capability skill remains the single owner of its contributed rule slice; `Code` does not create a second monolithic rule owner or consumer-local copy.
+- `test`
+  - Meaning: verification code for the `Main project` or for one explicitly declared `Self-contained` owner within it, including a `Submodule` or `Skill`.
+  - Role: a support entity, not a business owner.
+  - Production-boundary rule: `test` must not become the only owner of production algorithms or behavior.
+  - Owner-local placement and scope: `test` uses the canonical placement declared by the owning entity's applicable testing capability and project-local structure contract, and owns verification of that entity, its local support slices, and its owned integration contracts.
+  - Rule composition: it follows the shared `Code` layer, applicable testing capability skills selected through `External Standard Reference Rules`, and explicitly authorized project-local specializations within their declared scope.
+- `tool`
+  - Meaning: support and control code for the `Main project` or for one explicitly declared `Self-contained` owner within it, including a `Submodule` or `Skill`.
+  - Role: a support entity, not a business owner.
+  - Output contract: `tool` output, logging, and help text must be English unless a local owner explicitly says otherwise.
+  - Owner-local placement: `tool` uses the canonical local tool root declared by its owning entity; shared helper code for that tool root lives under its local `tool/lib/**` branch.
+  - Rule composition: it follows the shared `Code` layer, applicable tool capability skills selected through `External Standard Reference Rules`, and explicitly authorized project-local specializations within their declared scope.

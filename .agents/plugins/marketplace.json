@@ -1,0 +1,20 @@
+{
+  "name": "project-standards",
+  "interface": {
+    "displayName": "Project Standards"
+  },
+  "plugins": [
+    {
+      "name": "project-standards",
+      "source": {
+        "source": "local",
+        "path": "./plugins/project-standards"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "DeveloperTools"
+    }
+  ]
+}
