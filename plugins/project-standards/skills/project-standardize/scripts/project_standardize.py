@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 from dataclasses import dataclass
 import json
 from pathlib import Path
@@ -14,7 +15,7 @@ ALWAYS_REQUIRED_STANDARD_TUPLE = ("project-foundation", "project-instruction-dev
 PLUGIN_NAME = "project-standards"
 REQUIRED_HEADING = "## Required Standards"
 STANDARD_SKILL_ROOT = Path(__file__).resolve().parents[2]
-TEXT_SUFFIX_SET = {".json", ".md", ".py", ".toml", ".ts", ".tsx", ".yaml", ".yml"}
+STRUCTURED_CONFIG_SUFFIX_SET = {".json", ".yaml", ".yml"}
 
 
 @dataclass(frozen=True)
@@ -163,6 +164,40 @@ def _project_path_list_get(workspace_root: Path) -> list[Path]:
     )
 
 
+def _python_signal_set_get(project_path: Path, path_list: list[str]) -> set[str]:
+    """Collect structural Python signals without interpreting prose or string fixtures.
+
+    Args:
+        project_path: Repository worktree root.
+        path_list: Current tracked and untracked non-ignored paths.
+
+    Returns:
+        Import, name, attribute, and executable-script signals.
+    """
+
+    signal_set: set[str] = set()
+    for relative_path in path_list:
+        if not relative_path.endswith(".py"):
+            continue
+        source = (project_path / relative_path).read_text(encoding="utf-8", errors="ignore")
+        if source.startswith("#!/usr/bin/env python3"):
+            signal_set.add("shebang")
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                signal_set.update(f"import:{alias.name}" for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module is not None:
+                signal_set.add(f"import:{node.module}")
+            elif isinstance(node, ast.Name):
+                signal_set.add(f"name:{node.id}")
+            elif isinstance(node, ast.Attribute):
+                signal_set.add(f"attribute:{node.attr}")
+    return signal_set
+
+
 def _required_standard_list_get(project_path: Path, path_list: list[str]) -> list[str]:
     """Classify applicable standards from current project artifacts.
 
@@ -175,71 +210,85 @@ def _required_standard_list_get(project_path: Path, path_list: list[str]) -> lis
     """
 
     required_standard_set = set(ALWAYS_REQUIRED_STANDARD_TUPLE)
-    path_text = "\n".join(path_list)
-    content_text = _tracked_text_get(project_path, path_list)
-    searchable_text = f"{path_text}\n{content_text}"
-    searchable_text_lower = searchable_text.lower()
     python_path_list = [path for path in path_list if path.endswith(".py")]
+    python_signal_set = _python_signal_set_get(project_path, path_list)
+    root_agents_path = project_path / "AGENTS.md"
+    root_agents_text_lower = (
+        root_agents_path.read_text(encoding="utf-8", errors="ignore").lower() if root_agents_path.is_file() else ""
+    )
+    structured_config_text_lower = "\n".join(
+        (project_path / relative_path).read_text(encoding="utf-8", errors="ignore")
+        for relative_path in path_list
+        if (project_path / relative_path).suffix in STRUCTURED_CONFIG_SUFFIX_SET
+        and (project_path / relative_path).is_file()
+        and (project_path / relative_path).stat().st_size <= 262_144
+    ).lower()
 
     if python_path_list:
         required_standard_set.add("python-developer")
-    if (
-        any(path.startswith(("test/", "tests/")) and path.endswith(".py") for path in path_list)
-        or "pytest" in searchable_text_lower
+    if any(path.startswith(("test/", "tests/")) and path.endswith(".py") for path in path_list) or any(
+        signal.startswith("import:pytest") for signal in python_signal_set
     ):
         required_standard_set.add("pytest-developer")
     if ".gitmodules" in path_list:
         required_standard_set.add("submodule-developer")
     if any(path == "DESIGN.md" or path.startswith(("design/", "docs/", "doc/", "pattern/")) for path in path_list):
         required_standard_set.add("project-documentation-developer")
-    if "`legacy`" in searchable_text_lower or "legacy python" in searchable_text_lower:
+    if "`legacy`" in root_agents_text_lower or "legacy python" in root_agents_text_lower:
         required_standard_set.add("legacy-python-maintainer")
     if python_path_list and (
-        "#!/usr/bin/env python3" in searchable_text
-        or "import argparse" in searchable_text
-        or "config_argparse" in searchable_text
+        "shebang" in python_signal_set
+        or "import:argparse" in python_signal_set
+        or any(signal.startswith("import:config_argparse") for signal in python_signal_set)
     ):
         required_standard_set.add("python-cli-developer")
-    if python_path_list and ("import logging" in searchable_text or "config_logging" in searchable_text):
+    if python_path_list and (
+        "import:logging" in python_signal_set
+        or any(signal.startswith("import:config_logging") for signal in python_signal_set)
+    ):
         required_standard_set.add("python-logging-developer")
     if python_path_list and any(
-        signal in searchable_text_lower
-        for signal in ("retry_runtime", "requests_retry", "@retry", "retryconfig", "tenacity")
+        signal.startswith(("import:retry_runtime", "import:requests_retry", "import:tenacity"))
+        for signal in python_signal_set
     ):
         required_standard_set.add("python-retry-developer")
     if python_path_list and any(
-        signal in searchable_text_lower
-        for signal in ("import requests", "import httpx", "from requests", "from httpx", "aiohttp", "urllib3")
+        signal.startswith(("import:requests", "import:httpx", "import:aiohttp", "import:urllib3"))
+        for signal in python_signal_set
     ):
         required_standard_set.add("http-api-client-developer")
     if python_path_list and any(
-        signal in searchable_text_lower
-        for signal in ("fastapi", "from flask", "import flask", "from django", "import django")
+        signal.startswith(("import:fastapi", "import:flask", "import:django")) for signal in python_signal_set
     ):
         required_standard_set.add("rest-api-server-developer")
-    if python_path_list and any(
-        signal in searchable_text_lower for signal in ("config_env", "dotenv", "os.environ", "os.getenv(", "getenv(")
+    if python_path_list and (
+        any(signal.startswith(("import:config_env", "import:dotenv")) for signal in python_signal_set)
+        or ("import:os" in python_signal_set and bool({"attribute:environ", "attribute:getenv"} & python_signal_set))
     ):
         required_standard_set.add("runtime-config-developer")
     if python_path_list and any(
-        signal in searchable_text_lower for signal in ("sqlalchemy", "model_sqlalchemy", "config_sqlalchemy")
+        signal.startswith(("import:sqlalchemy", "import:model_sqlalchemy", "import:config_sqlalchemy"))
+        for signal in python_signal_set
     ):
         required_standard_set.add("sqlalchemy-developer")
     if any(path.endswith((".ts", ".tsx")) or path == "tsconfig.json" for path in path_list):
         required_standard_set.add("typescript-developer")
-    if any(path.endswith(".tsx") for path in path_list) or '"react"' in searchable_text_lower:
+    if any(path.endswith(".tsx") for path in path_list):
         required_standard_set.add("react-ui-developer")
     if any(
         Path(path).name in {"Dockerfile", "compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml"}
         for path in path_list
     ):
         required_standard_set.add("docker-compose-developer")
-    if "apiversion:" in searchable_text_lower and any(
-        f"kind: {kind}" in searchable_text_lower
+    if "apiversion:" in structured_config_text_lower and any(
+        f"kind: {kind}" in structured_config_text_lower
         for kind in ("deployment", "job", "statefulset", "daemonset", "service")
     ):
         required_standard_set.add("kubernetes-developer")
-    if "awstemplateformatversion" in searchable_text_lower or "aws::cloudformation" in searchable_text_lower:
+    if (
+        "awstemplateformatversion" in structured_config_text_lower
+        or "aws::cloudformation" in structured_config_text_lower
+    ):
         required_standard_set.add("aws-cloudformation-developer")
     return sorted(required_standard_set)
 
@@ -273,26 +322,6 @@ def _required_standard_write(report: ProjectReport) -> None:
     prefix = text[:insert_index].rstrip()
     suffix = text[insert_index:].lstrip()
     agents_path.write_text(f"{prefix}\n{entry_text}\n{suffix}", encoding="utf-8")
-
-
-def _tracked_text_get(project_path: Path, path_list: list[str]) -> str:
-    """Load bounded classification text from relevant project files.
-
-    Args:
-        project_path: Repository worktree root.
-        path_list: Current tracked and untracked non-ignored paths.
-
-    Returns:
-        Concatenated text content.
-    """
-
-    text_list: list[str] = []
-    for relative_path in path_list:
-        path = project_path / relative_path
-        if path.suffix not in TEXT_SUFFIX_SET or not path.is_file() or path.stat().st_size > 262_144:
-            continue
-        text_list.append(path.read_text(encoding="utf-8", errors="ignore"))
-    return "\n".join(text_list)
 
 
 def _workspace_report_get(workspace_root: Path) -> tuple[list[ProjectReport], list[str]]:

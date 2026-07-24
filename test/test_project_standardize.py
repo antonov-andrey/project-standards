@@ -135,6 +135,51 @@ def test_check_reports_missing_instruction_metadata_without_writing(tmp_path: Pa
     assert report["missing_metadata_list"] == ["AGENTS.md", "Required Standards"]
 
 
+def test_check_ignores_instruction_examples_and_string_fixtures(tmp_path: Path) -> None:
+    """Classification does not turn documented technology names into runtime capabilities.
+
+    Args:
+        tmp_path: Isolated workspace parent.
+    """
+
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    _project_create(
+        workspace_root,
+        "provider",
+        {
+            "AGENTS.md": (
+                "# Repository Guidelines\n\n"
+                "## Required Standards\n\n"
+                "- `project-standards:project-foundation` applies repository-wide.\n"
+                "- `project-standards:project-instruction-developer` applies to instructions.\n"
+                "- `project-standards:pytest-developer` applies to tests.\n"
+                "- `project-standards:python-developer` applies to Python code.\n"
+            ),
+            "plugins/example/skills/reference.md": (
+                "Examples mention SQLAlchemy, FastAPI, requests, retry_runtime, AWS::CloudFormation, React, and Legacy.\n"
+            ),
+            "test/test_fixture.py": (
+                'SOURCE = """import sqlalchemy\\nfrom fastapi import FastAPI\\nimport requests\\nfrom tenacity import retry\\n"""\n'
+                "\n"
+                "def test_fixture() -> None:\n"
+                "    assert SOURCE\n"
+            ),
+        },
+    )
+
+    result = _tool_run(workspace_root)
+
+    assert result.returncode == 0
+    required_standard_list = json.loads(result.stdout)["project_list"][0]["required_standard_list"]
+    assert required_standard_list == [
+        "project-foundation",
+        "project-instruction-developer",
+        "pytest-developer",
+        "python-developer",
+    ]
+
+
 def test_check_reports_unavailable_declared_provider_skill(tmp_path: Path) -> None:
     """A provider-qualified selection fails closed when its skill is unavailable.
 
