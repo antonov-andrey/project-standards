@@ -337,10 +337,14 @@ def _workspace_report_get(workspace_root: Path) -> tuple[list[ProjectReport], li
     available_standard_set = _available_standard_set_get()
     report_list: list[ProjectReport] = []
     for project_path in _project_path_list_get(workspace_root):
-        path_list = _git_output_get(
-            project_path,
-            ["ls-files", "--cached", "--others", "--exclude-standard"],
-        ).splitlines()
+        path_list = [
+            relative_path
+            for relative_path in _git_output_get(
+                project_path,
+                ["ls-files", "--cached", "--others", "--exclude-standard"],
+            ).splitlines()
+            if (project_path / relative_path).exists() or (project_path / relative_path).is_symlink()
+        ]
         agents_path = project_path / "AGENTS.md"
         declared_standard_list = _declared_standard_list_get(agents_path)
         report_list.append(

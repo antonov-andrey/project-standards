@@ -211,6 +211,43 @@ def test_check_reports_unavailable_declared_provider_skill(tmp_path: Path) -> No
     assert report["unavailable_standard_list"] == ["missing-standard"]
 
 
+def test_check_skips_tracked_files_deleted_from_worktree(tmp_path: Path) -> None:
+    """Classification must ignore paths removed during an active migration.
+
+    Args:
+        tmp_path: Isolated workspace parent.
+    """
+
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    project_path = _project_create(
+        workspace_root,
+        "migration",
+        {
+            "AGENTS.md": (
+                "# Repository Guidelines\n\n"
+                "## Required Standards\n\n"
+                "- `project-standards:project-foundation` applies repository-wide.\n"
+                "- `project-standards:project-instruction-developer` applies to instructions.\n"
+            ),
+            "retired.py": "import sqlalchemy\n",
+        },
+    )
+    subprocess.run(["git", "add", "."], check=True, cwd=project_path)
+    subprocess.run(
+        ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "initial"],
+        check=True,
+        cwd=project_path,
+    )
+    (project_path / "retired.py").unlink()
+
+    result = _tool_run(workspace_root)
+
+    assert result.returncode == 0
+    report = json.loads(result.stdout)["project_list"][0]
+    assert report["required_standard_list"] == ["project-foundation", "project-instruction-developer"]
+
+
 def test_write_preserves_project_overlay_and_rechecks_result(tmp_path: Path) -> None:
     """Write mode adds selections without replacing project-local prose.
 
