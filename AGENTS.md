@@ -27,6 +27,6 @@ If one required provider skill is unavailable, continue read-only discovery only
 
 ## Commands
 
-- Validate the plugin with `python /home/andrey/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py plugins/project-standards`.
-- Validate every skill with `python /home/andrey/.codex/skills/.system/skill-creator/scripts/quick_validate.py <skill-root>`.
+- Validate the plugin with `python ~/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py plugins/project-standards`.
+- Validate every skill with `python ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py <skill-root>`.
 - Run provider tests with `pytest -q`.
