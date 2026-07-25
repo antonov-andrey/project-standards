@@ -1,6 +1,6 @@
 ---
 name: project-standard-audit
-description: Use when semantically auditing one repository or workspace for required-standard selection, provider availability, project overlays, duplicated standard prose, stale task artifacts, or owner-boundary violations.
+description: Use when semantically auditing one repository or workspace for required-standard selection, provider availability, project overlays, duplicated standard prose, tracked task artifacts, or owner-boundary violations.
 ---
 
 # Project Standard Audit

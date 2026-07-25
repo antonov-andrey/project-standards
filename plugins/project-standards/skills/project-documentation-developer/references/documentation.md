@@ -7,4 +7,4 @@
 - Code changes MUST update documentation only when they change a stable documented architecture, operational fact, script lifecycle rule, run or test exception, or maintained project workflow.
 - Documentation updates required by a code change MUST happen before handoff verification.
 - Create a retained target and verify complete semantic preservation before deleting or moving its source.
-- Do not leave forwarding documents, compatibility paths, simultaneous old and new owners, empty roots created for symmetry, or accumulated completed task history.
+- Do not leave forwarding documents, compatibility paths, simultaneous old and new owners, empty roots created for symmetry, or task history in tracked documentation. Apply the `.spec` retention and deletion contract from `references/documentation-model.md` to ignored task pairs.

@@ -23,7 +23,7 @@ If one required provider skill is unavailable, continue read-only discovery only
 - Shared contracts have exactly one owning reference and dependent skills cite that owner instead of copying it.
 - Consumer projects select applicable skills through their `AGENTS.md` section `Required Standards`; consumer-local generated or copied standard prose is forbidden.
 - Domain-specific agent workflows and generic task orchestration do not belong in this repository.
-- Active task pairs live only under the ignored `.spec/` root.
+- Task pairs live only under the ignored `.spec/` root, remain untracked, and MUST NOT be deleted unless the user explicitly requests their deletion.
 
 ## Commands
 
