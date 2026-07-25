@@ -181,22 +181,21 @@ def _exist_kubernetes_integration(project_path: Path, path_list: list[str]) -> b
                 r'(?m)^\s*(?:kind\s*:|"kind"\s*:)', source_lower
             ):
                 return True
-            if "templates" in {part.lower() for part in path.parts} and "{{" in source_lower:
-                return True
         if suffix in SOURCE_SUFFIX_SET:
+            if suffix == ".py":
+                continue
             source_lower = path.read_text(encoding="utf-8", errors="ignore").lower()
-            if re.search(r"(?m)^\s*(?:from|import)\s+kubernetes(?:_asyncio)?(?:[.\s]|$)", source_lower):
-                return True
-            if re.search(
-                r"""(?m)^\s*(?:import\b[^\n]*@kubernetes/client-node|[^\n]*\brequire\s*\(\s*["']@kubernetes/client-node)""",
+            if suffix in {".js", ".jsx", ".ts", ".tsx"} and re.search(
+                r"""(?m)^\s*(?:import\b[^\n]*["']@kubernetes/client-node|(?:const|let|var)\b[^\n]*=\s*require\s*\(\s*["']@kubernetes/client-node)""",
                 source_lower,
             ):
                 return True
-            if suffix == ".go" and any(
-                import_path in source_lower
-                for import_path in ('"k8s.io/client-go/', '"sigs.k8s.io/controller-runtime/pkg/client"')
-            ):
-                return True
+            if suffix == ".go":
+                go_client_path_pattern = r'"(?:k8s\.io/client-go/[^"]+|sigs\.k8s\.io/controller-runtime/pkg/client)"'
+                if re.search(rf"(?m)^\s*import\s+(?:[._a-z][a-z0-9_]*\s+)?{go_client_path_pattern}", source_lower):
+                    return True
+                if re.search(rf"(?s)\bimport\s*\([^)]*{go_client_path_pattern}", source_lower):
+                    return True
             if suffix in {".java", ".kt", ".kts"} and re.search(
                 r"(?m)^\s*import\s+(?:io\.fabric8\.kubernetes\.client|io\.kubernetes\.client)\.",
                 source_lower,
@@ -258,12 +257,10 @@ def _exist_zitadel_integration(project_path: Path, path_list: list[str]) -> bool
                 return True
         if suffix not in SOURCE_SUFFIX_SET:
             continue
-        if re.search(
-            r"""(?m)^\s*(?:import\b[^\n]*["']@zitadel/|[^\n]*\brequire\s*\(\s*["']@zitadel/)""",
+        if suffix in {".js", ".jsx", ".ts", ".tsx"} and re.search(
+            r"""(?m)^\s*(?:import\b[^\n]*["']@zitadel/|(?:const|let|var)\b[^\n]*=\s*require\s*\(\s*["']@zitadel/)""",
             source_lower,
         ):
-            return True
-        if re.search(r"(?m)^\s*(?:from|import)\s+zitadel(?:[.\s]|$)", source_lower):
             return True
         path_token_set = {
             token
@@ -385,6 +382,9 @@ def _required_standard_list_get(project_path: Path, path_list: list[str]) -> lis
     required_standard_set = set(ALWAYS_REQUIRED_STANDARD_TUPLE)
     python_path_list = [path for path in path_list if path.endswith(".py")]
     python_signal_set = _python_signal_set_get(project_path, path_list)
+    python_import_name_set = {
+        signal.removeprefix("import:") for signal in python_signal_set if signal.startswith("import:")
+    }
     root_agents_path = project_path / "AGENTS.md"
     root_agents_text_lower = (
         root_agents_path.read_text(encoding="utf-8", errors="ignore").lower() if root_agents_path.is_file() else ""
@@ -453,9 +453,15 @@ def _required_standard_list_get(project_path: Path, path_list: list[str]) -> lis
         for path in path_list
     ):
         required_standard_set.add("docker-compose-developer")
-    if _exist_kubernetes_integration(project_path, path_list):
+    if _exist_kubernetes_integration(project_path, path_list) or any(
+        import_name in {"kubernetes", "kubernetes_asyncio"}
+        or import_name.startswith(("kubernetes.", "kubernetes_asyncio."))
+        for import_name in python_import_name_set
+    ):
         required_standard_set.add("kubernetes-developer")
-    if _exist_zitadel_integration(project_path, path_list):
+    if _exist_zitadel_integration(project_path, path_list) or any(
+        import_name == "zitadel" or import_name.startswith("zitadel.") for import_name in python_import_name_set
+    ):
         required_standard_set.add("zitadel-developer")
     if (
         "awstemplateformatversion" in structured_config_text_lower

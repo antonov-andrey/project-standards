@@ -366,6 +366,7 @@ def test_check_ignores_instruction_examples_and_string_fixtures(tmp_path: Path) 
             "plugins/example/skills/reference.md": (
                 "Examples mention SQLAlchemy, FastAPI, requests, retry_runtime, AWS::CloudFormation, React, Kubernetes, ZITADEL, and Legacy.\n"
             ),
+            "runtime.py": 'SOURCE = """\\nfrom kubernetes import client\\n"""\n',
             "test/fixtures/deploy/zitadel.yaml": "apiVersion: v1\nkind: Namespace\nname: zitadel\n",
             "test/test_fixture.py": (
                 'SOURCE = """import sqlalchemy\\nfrom fastapi import FastAPI\\nimport requests\\nfrom kubernetes import client\\nfrom tenacity import retry\\nZITADEL\\n"""\n'
@@ -450,6 +451,8 @@ def test_check_ignores_generic_oidc_and_zitadel_path_without_integration(tmp_pat
                 'import { UserManager } from "oidc-client-ts";\n'
                 'export const authority = "https://identity.example.test";\n'
                 'export const detectorSignature = "urn:zitadel:";\n'
+                "export const kubernetesFixture = 'require(\"@kubernetes/client-node\")';\n"
+                "export const zitadelFixture = 'require(\"@zitadel/client\")';\n"
             ),
         },
     )
@@ -474,6 +477,38 @@ def test_check_ignores_generic_oidc_and_zitadel_path_without_integration(tmp_pat
     assert result.returncode == 0
     for report in json.loads(result.stdout)["project_list"]:
         assert "zitadel-developer" not in report["required_standard_list"]
+
+
+def test_check_ignores_non_helm_structured_template(tmp_path: Path) -> None:
+    """A generic structured template is not Kubernetes packaging evidence.
+
+    Args:
+        tmp_path: Isolated workspace parent.
+    """
+
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    _project_create(
+        workspace_root,
+        "templated-config",
+        {
+            "AGENTS.md": (
+                "# Repository Guidelines\n\n"
+                "## Table Of Contents\n\n"
+                "- [Required Standards](#required-standards)\n\n"
+                "## Required Standards\n\n"
+                "- `project-standards:project-foundation` applies repository-wide.\n"
+                "- `project-standards:project-instruction-developer` applies to instructions.\n"
+            ),
+            "src/templates/application.yaml": 'application_name: "{{ application_name }}"\n',
+        },
+    )
+
+    result = _tool_run(workspace_root)
+
+    assert result.returncode == 0
+    required_standard_list = json.loads(result.stdout)["project_list"][0]["required_standard_list"]
+    assert "kubernetes-developer" not in required_standard_list
 
 
 def test_check_skips_gitlink_directories_during_integration_scan(tmp_path: Path) -> None:
