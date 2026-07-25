@@ -45,10 +45,12 @@
 ## OpenAPI, Schemas, And Errors
 
 - OpenAPI security metadata matches the route access declaration.
+- Every route registers its OpenAPI metadata through `ProductApiRouter` or `ProductApiResource`.
 - Every route provides a summary, description, stable tags, a response description when a response body exists, and descriptions for every path, query, header, form, body, request-schema field, and response-schema field.
 - `/openapi.json` is sorted by URL path and uses the HTTP method order `GET`, `POST`, `PATCH`, `DELETE`.
 - Request and response fields preserve canonical persisted or domain field identities unless one explicit external protocol owns another name.
 - Product schemas expose only intended contract fields and MUST NOT expose service-only fields such as `is_deleted`.
+- A boundary-local request or response schema is allowed only for one operation payload, explicit external protocol, or declared secret-bearing response and MUST NOT become a second canonical resource model.
 - Field-renaming mapper layers for canonical persisted fields are forbidden.
 - Product responses preserve canonical persisted values except for conversion required by JSON serialization, transport safety, or one explicit external protocol.
 - User-facing clients receive the concrete controlling validation, authentication, network, or backend error without stack traces or generic replacement wrappers.
@@ -93,6 +95,14 @@
   - excludes its response body from `ApiRequestLog`, middleware body capture, caches, telemetry, and ordinary logs;
   - records only non-secret audit metadata.
 - Secret-bearing Product flows use this boundary instead of ordinary JSON payloads.
+
+## Extension
+
+- Add one unique command when its state transition is not expressible as one standard resource action.
+- Add one boundary-local schema only when an operation payload or explicit external protocol requires it.
+- Add one infrastructure route only when the route has no Product data, Product auth context, Product session, or Product domain-service dependency.
+- Concrete Product actions, role allowlists beyond standard administrator delegation, selector eligibility, domain lifecycle guards, capability keys, and route paths remain project-local.
+- This skill owns the reusable behavior contract, not a copied runtime implementation. Before a second project implements the same `ProductApiRouter` runtime, establish one reusable runtime owner and migrate the existing implementation; a parallel or copied implementation is forbidden.
 
 ## Verification
 
