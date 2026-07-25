@@ -9,6 +9,7 @@
   - Membership: it includes product backend code, product frontend code, product deployment configuration, reusable library code, persisted-entity code, script-family code, and root entrypoints when those entrypoints are runtime or business wrappers rather than standalone support utilities.
   - Exclusions: it does not include `Main project AGENTS.md`, `Main project documentation`, `Skill`, `Submodule`, `test`, `tool`, or `Legacy`, including thin root Python entrypoints whose implementation owner is `Legacy`.
   - Rule composition: it follows the shared `Code` layer, applicable capability skills selected through `External Standard Reference Rules`, and explicitly authorized project-local specializations within their declared scope.
+  - Import boundary: `Main project code` may import only from `Main project code` or `Submodule code`; it MUST NOT import `Python script`, `test`, or `tool`.
 - `Self-contained`
   - Meaning: the entity owns its own private files and local assets within its own boundary.
   - Duplication boundary: duplication of code, instructions, tooling, tests, templates, or other owned assets across `Self-contained` entities is forbidden.
@@ -34,3 +35,12 @@
   - Output contract: `tool` output, logging, and help text must be English unless a local owner explicitly says otherwise.
   - Owner-local placement: `tool` uses the canonical local tool root declared by its owning entity; shared helper code for that tool root lives under its local `tool/lib/**` branch.
   - Rule composition: it follows the shared `Code` layer, applicable tool capability skills selected through `External Standard Reference Rules`, and explicitly authorized project-local specializations within their declared scope.
+
+## Tool Utility Ownership Contract
+
+- A second owner-local caller for the same `tool` task MUST trigger extraction of that task into one shared implementation module under that same owner-local `tool/lib/<module>.py`; do not keep the duplicated logic inline in entrypoints or command sequences.
+- If two or more `tool` entrypoints in one owner-local `tool` scope perform the same task, each of those entrypoints MUST delegate to that one shared implementation module.
+- That shared owner-local `tool/lib/<module>.py` module MUST group utilities for one clearly defined tool task or one coherent tool domain. It MUST NOT become a grab-bag of unrelated helper functions.
+- If an owner-local `tool` utility already exists for one action, that utility MUST be used instead of an ad-hoc command sequence.
+- Root-repository `tool` MUST NOT host owner-local `tool` utilities of one `Skill`; those utilities MUST stay under the owning entity's local `tool`.
+- `tool` MUST NOT import `Python script`.

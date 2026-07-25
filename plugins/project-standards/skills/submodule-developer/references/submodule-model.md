@@ -8,3 +8,9 @@
   - Membership: it includes product backend code, product frontend code, product deployment configuration, reusable library code, persisted-entity code, script-family code, and submodule entrypoints when those entrypoints are runtime or business wrappers rather than standalone support utilities.
   - Exclusions: it does not include `Submodule AGENTS.md`, local `test`, local `tool`, or other non-code local assets of that `Submodule`.
   - Rule composition: it follows the shared `Code` layer, capability skills selected for the owning `Submodule` through `External Standard Reference Rules`, and the applicable `Submodule AGENTS.md` chain within its declared boundary.
+
+## Python Portability Contract
+
+- Applicability: these rules apply to `Submodule code` implemented in Python.
+- `Submodule code` implemented in Python MUST NOT hardcode project-specific DB identifiers, path identifiers, or project identifiers.
+- The portability delta for a `Submodule`-owned `Python script` is that it MUST launch from the repository root by direct relative path under the `Submodule` root, and it MUST also launch from the `Submodule` root by the same direct script path, with an optional `./` prefix allowed there too.

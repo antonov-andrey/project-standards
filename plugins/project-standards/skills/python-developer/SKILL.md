@@ -5,7 +5,15 @@ description: Use when writing, refactoring, reviewing, or structurally changing 
 
 # Python Developer
 
-Read `references/python-code.md` completely. Read `references/script-workflow-owner.md` when a bounded algorithm has two or more ordered stages and correctness depends on their handoff or order.
+Read these references completely:
+
+- `references/python-code.md`;
+- `references/python-core.md`;
+- `references/python-refactoring.md`;
+- `references/python-naming.md`;
+- `references/python-ownership.md`.
+
+Read `references/script-workflow-owner.md` when a bounded algorithm has two or more ordered stages and correctness depends on their handoff or order.
 
 Apply `project-foundation` and the more specific capability for CLI, logging, retry, tests, SQLAlchemy, runtime configuration, or HTTP boundaries when those concerns are present.
 
