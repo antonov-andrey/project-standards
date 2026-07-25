@@ -12,8 +12,21 @@ import re
 import subprocess
 
 ALWAYS_REQUIRED_STANDARD_TUPLE = ("project-foundation", "project-instruction-developer")
+NON_RUNTIME_PATH_PART_SET = {
+    ".spec",
+    "design",
+    "doc",
+    "docs",
+    "example",
+    "examples",
+    "fixture",
+    "fixtures",
+    "test",
+    "tests",
+}
 PLUGIN_NAME = "project-standards"
 REQUIRED_HEADING = "## Required Standards"
+SOURCE_SUFFIX_SET = {".go", ".java", ".js", ".jsx", ".kt", ".kts", ".py", ".rs", ".ts", ".tsx"}
 STANDARD_SKILL_ROOT = Path(__file__).resolve().parents[2]
 STRUCTURED_CONFIG_SUFFIX_SET = {".json", ".yaml", ".yml"}
 TABLE_OF_CONTENTS_HEADING = "## Table Of Contents"
@@ -135,6 +148,147 @@ def _heading_anchor_get(heading: str) -> str:
     return "".join(
         "-" if character == " " else character.lower() if character.isalnum() else "" for character in heading
     )
+
+
+def _exist_kubernetes_integration(project_path: Path, path_list: list[str]) -> bool:
+    """Return whether executable artifacts prove one Kubernetes integration.
+
+    Args:
+        project_path: Repository worktree root.
+        path_list: Current tracked and untracked non-ignored paths.
+
+    Returns:
+        Whether Kubernetes resources, packaging, or client use exists.
+    """
+
+    for relative_path in path_list:
+        if not _is_runtime_path(relative_path):
+            continue
+        path = project_path / relative_path
+        path_name_lower = path.name.lower()
+        suffix = path.suffix.lower()
+        if path_name_lower in {"kustomization", "kustomization.yaml", "kustomization.yml"}:
+            return True
+        if suffix in STRUCTURED_CONFIG_SUFFIX_SET:
+            source_lower = path.read_text(encoding="utf-8", errors="ignore").lower()
+            if (
+                path_name_lower in {"chart.yaml", "chart.yml"}
+                and "apiversion:" in source_lower
+                and "name:" in source_lower
+            ):
+                return True
+            if re.search(r'(?m)^\s*(?:apiversion\s*:|"apiversion"\s*:)', source_lower) and re.search(
+                r'(?m)^\s*(?:kind\s*:|"kind"\s*:)', source_lower
+            ):
+                return True
+            if "templates" in {part.lower() for part in path.parts} and "{{" in source_lower:
+                return True
+        if suffix in SOURCE_SUFFIX_SET:
+            source_lower = path.read_text(encoding="utf-8", errors="ignore").lower()
+            if re.search(r"(?m)^\s*(?:from|import)\s+kubernetes(?:_asyncio)?(?:[.\s]|$)", source_lower):
+                return True
+            if re.search(
+                r"""(?m)^\s*(?:import\b[^\n]*@kubernetes/client-node|[^\n]*\brequire\s*\(\s*["']@kubernetes/client-node)""",
+                source_lower,
+            ):
+                return True
+            if suffix == ".go" and any(
+                import_path in source_lower
+                for import_path in ('"k8s.io/client-go/', '"sigs.k8s.io/controller-runtime/pkg/client"')
+            ):
+                return True
+            if suffix in {".java", ".kt", ".kts"} and re.search(
+                r"(?m)^\s*import\s+(?:io\.fabric8\.kubernetes\.client|io\.kubernetes\.client)\.",
+                source_lower,
+            ):
+                return True
+            if suffix == ".rs" and re.search(r"(?m)^\s*use\s+kube(?:::|;)", source_lower):
+                return True
+    return False
+
+
+def _exist_zitadel_integration(project_path: Path, path_list: list[str]) -> bool:
+    """Return whether executable artifacts prove one ZITADEL integration.
+
+    Args:
+        project_path: Repository worktree root.
+        path_list: Current tracked and untracked non-ignored paths.
+
+    Returns:
+        Whether a ZITADEL deployment, client, or bound OIDC configuration exists.
+    """
+
+    identity_protocol_signal_tuple = (
+        "/v2/users",
+        "authority",
+        "fetch(",
+        "httpx",
+        "introspect",
+        "issuer",
+        "oauth",
+        "oidc",
+        "openid",
+        "react-oidc-context",
+        "requests",
+    )
+    zitadel_config_signal_tuple = (
+        "charts.zitadel.com",
+        "ghcr.io/zitadel/",
+        "registry.zitadel.cloud/",
+        "urn:zitadel:",
+    )
+    for relative_path in path_list:
+        if not _is_runtime_path(relative_path):
+            continue
+        path = project_path / relative_path
+        path_part_lower_list = [part.lower() for part in Path(relative_path).parts]
+        suffix = path.suffix.lower()
+        if suffix not in STRUCTURED_CONFIG_SUFFIX_SET | SOURCE_SUFFIX_SET or not path.is_file():
+            continue
+        source_lower = path.read_text(encoding="utf-8", errors="ignore").lower()
+        if suffix in STRUCTURED_CONFIG_SUFFIX_SET:
+            if any(signal in source_lower for signal in zitadel_config_signal_tuple):
+                return True
+            if re.search(r'(?m)^\s*"?zitadel"?\s*:', source_lower):
+                return True
+            if re.search(
+                r"(?m)^\s*-\s+name:\s+zitadel_(?:database|defaultinstance|external|firstinstance|logstore)\b",
+                source_lower,
+            ):
+                return True
+        if suffix not in SOURCE_SUFFIX_SET:
+            continue
+        if re.search(
+            r"""(?m)^\s*(?:import\b[^\n]*["']@zitadel/|[^\n]*\brequire\s*\(\s*["']@zitadel/)""",
+            source_lower,
+        ):
+            return True
+        if re.search(r"(?m)^\s*(?:from|import)\s+zitadel(?:[.\s]|$)", source_lower):
+            return True
+        path_token_set = {
+            token
+            for path_part_lower in path_part_lower_list
+            for token in re.split(r"[^a-z0-9]+", path_part_lower)
+            if token
+        }
+        if "zitadel" not in path_token_set:
+            continue
+        if any(signal in source_lower for signal in identity_protocol_signal_tuple):
+            return True
+    return False
+
+
+def _is_runtime_path(relative_path: str) -> bool:
+    """Return whether one path can represent an executable integration artifact.
+
+    Args:
+        relative_path: Repository-relative path.
+
+    Returns:
+        Whether the path is outside documentation, examples, fixtures, and tests.
+    """
+
+    return not ({part.lower() for part in Path(relative_path).parts} & NON_RUNTIME_PATH_PART_SET)
 
 
 def _missing_metadata_list_get(agents_path: Path) -> list[str]:
@@ -299,11 +453,10 @@ def _required_standard_list_get(project_path: Path, path_list: list[str]) -> lis
         for path in path_list
     ):
         required_standard_set.add("docker-compose-developer")
-    if "apiversion:" in structured_config_text_lower and any(
-        f"kind: {kind}" in structured_config_text_lower
-        for kind in ("deployment", "job", "statefulset", "daemonset", "service")
-    ):
+    if _exist_kubernetes_integration(project_path, path_list):
         required_standard_set.add("kubernetes-developer")
+    if _exist_zitadel_integration(project_path, path_list):
+        required_standard_set.add("zitadel-developer")
     if (
         "awstemplateformatversion" in structured_config_text_lower
         or "aws::cloudformation" in structured_config_text_lower

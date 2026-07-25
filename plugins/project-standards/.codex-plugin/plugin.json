@@ -1,6 +1,6 @@
 {
   "name": "project-standards",
-  "version": "0.1.0+codex.20260725163147",
+  "version": "0.1.0+codex.20260725194601",
   "description": "Opinionated cross-domain project engineering standards, selection, and audit workflows.",
   "author": {
     "name": "Andrey Antonov",
@@ -17,7 +17,7 @@
   "interface": {
     "displayName": "Project Standards",
     "shortDescription": "Apply reusable engineering standards consistently.",
-    "longDescription": "Project Standards provides independently selectable capability contracts for project structure, instructions, documentation, Python, APIs, persistence, frontend, deployment, standardization, and semantic audit.",
+    "longDescription": "Project Standards provides independently selectable capability contracts for project structure, instructions, documentation, Python, APIs, persistence, identity, frontend, deployment, standardization, and semantic audit.",
     "developerName": "Andrey Antonov",
     "category": "DeveloperTools",
     "capabilities": [

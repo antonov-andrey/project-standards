@@ -116,6 +116,177 @@ def test_check_classifies_current_project_boundaries(tmp_path: Path) -> None:
     } <= required_standard_set
 
 
+def test_check_classifies_kubernetes_integration_variants(tmp_path: Path) -> None:
+    """Kubernetes classification accepts resources, Helm, Kustomize, and executable clients.
+
+    Args:
+        tmp_path: Isolated workspace parent.
+    """
+
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    _project_create(
+        workspace_root,
+        "client",
+        {
+            "AGENTS.md": "# Repository Guidelines\n",
+            "app.py": "from kubernetes import client\n",
+        },
+    )
+    _project_create(
+        workspace_root,
+        "client-asyncio",
+        {
+            "AGENTS.md": "# Repository Guidelines\n",
+            "app.py": "from kubernetes_asyncio import client\n",
+        },
+    )
+    _project_create(
+        workspace_root,
+        "client-go",
+        {
+            "AGENTS.md": "# Repository Guidelines\n",
+            "main.go": 'package main\n\nimport "k8s.io/client-go/kubernetes"\n',
+        },
+    )
+    _project_create(
+        workspace_root,
+        "client-java",
+        {
+            "AGENTS.md": "# Repository Guidelines\n",
+            "Main.java": "import io.kubernetes.client.openapi.ApiClient;\n",
+        },
+    )
+    _project_create(
+        workspace_root,
+        "client-node",
+        {
+            "AGENTS.md": "# Repository Guidelines\n",
+            "app.ts": 'import * as k8s from "@kubernetes/client-node";\n',
+        },
+    )
+    _project_create(
+        workspace_root,
+        "client-rust",
+        {
+            "AGENTS.md": "# Repository Guidelines\n",
+            "main.rs": "use kube::Client;\n",
+        },
+    )
+    _project_create(
+        workspace_root,
+        "helm",
+        {
+            "AGENTS.md": "# Repository Guidelines\n",
+            "deploy/chart/Chart.yaml": "apiVersion: v2\nname: application\n",
+        },
+    )
+    _project_create(
+        workspace_root,
+        "kustomize",
+        {
+            "AGENTS.md": "# Repository Guidelines\n",
+            "deploy/kustomization.yaml": "resources:\n  - deployment.yaml\n",
+        },
+    )
+    _project_create(
+        workspace_root,
+        "resource",
+        {
+            "AGENTS.md": "# Repository Guidelines\n",
+            "deploy/namespace.yaml": "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: application\n",
+        },
+    )
+
+    result = _tool_run(workspace_root)
+
+    assert result.returncode == 1
+    report_by_name_map = {Path(report["path"]).name: report for report in json.loads(result.stdout)["project_list"]}
+    assert set(report_by_name_map) == {
+        "client",
+        "client-asyncio",
+        "client-go",
+        "client-java",
+        "client-node",
+        "client-rust",
+        "helm",
+        "kustomize",
+        "resource",
+    }
+    for report in report_by_name_map.values():
+        assert "kubernetes-developer" in report["required_standard_list"]
+
+
+def test_check_classifies_zitadel_integration_and_reports_missing_selection(tmp_path: Path) -> None:
+    """A real ZITADEL deployment requires the available identity standard.
+
+    Args:
+        tmp_path: Isolated workspace parent.
+    """
+
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    _project_create(
+        workspace_root,
+        "identity",
+        {
+            "AGENTS.md": (
+                "# Repository Guidelines\n\n"
+                "## Table Of Contents\n\n"
+                "- [Required Standards](#required-standards)\n\n"
+                "## Required Standards\n\n"
+                "- `project-standards:project-foundation` applies repository-wide.\n"
+                "- `project-standards:project-instruction-developer` applies to instructions.\n"
+            ),
+            "deploy/helm/zitadel/values.yaml": "image:\n  repository: ghcr.io/zitadel/zitadel\n",
+        },
+    )
+
+    result = _tool_run(workspace_root)
+
+    assert result.returncode == 1
+    report = json.loads(result.stdout)["project_list"][0]
+    assert "zitadel-developer" in report["required_standard_list"]
+    assert report["missing_standard_list"] == ["zitadel-developer"]
+    assert report["unavailable_standard_list"] == []
+
+
+def test_check_classifies_zitadel_client_and_bound_oidc_configuration(tmp_path: Path) -> None:
+    """Dedicated ZITADEL client and bound OIDC code both select the identity standard.
+
+    Args:
+        tmp_path: Isolated workspace parent.
+    """
+
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    _project_create(
+        workspace_root,
+        "client",
+        {
+            "AGENTS.md": "# Repository Guidelines\n",
+            "src/zitadel_client.py": "import httpx\n\nURL = '/v2/users'\n",
+        },
+    )
+    _project_create(
+        workspace_root,
+        "oidc",
+        {
+            "AGENTS.md": "# Repository Guidelines\n",
+            "src/auth/zitadel_auth/auth_config.ts": (
+                'import { AuthProvider } from "react-oidc-context";\n'
+                'export const authority = "https://identity.example.test";\n'
+            ),
+        },
+    )
+
+    result = _tool_run(workspace_root)
+
+    assert result.returncode == 1
+    for report in json.loads(result.stdout)["project_list"]:
+        assert "zitadel-developer" in report["required_standard_list"]
+
+
 def test_check_reports_missing_instruction_metadata_without_writing(tmp_path: Path) -> None:
     """Default check mode reports missing metadata and preserves the worktree.
 
@@ -193,10 +364,11 @@ def test_check_ignores_instruction_examples_and_string_fixtures(tmp_path: Path) 
                 "- `project-standards:python-developer` applies to Python code.\n"
             ),
             "plugins/example/skills/reference.md": (
-                "Examples mention SQLAlchemy, FastAPI, requests, retry_runtime, AWS::CloudFormation, React, and Legacy.\n"
+                "Examples mention SQLAlchemy, FastAPI, requests, retry_runtime, AWS::CloudFormation, React, Kubernetes, ZITADEL, and Legacy.\n"
             ),
+            "test/fixtures/deploy/zitadel.yaml": "apiVersion: v1\nkind: Namespace\nname: zitadel\n",
             "test/test_fixture.py": (
-                'SOURCE = """import sqlalchemy\\nfrom fastapi import FastAPI\\nimport requests\\nfrom tenacity import retry\\n"""\n'
+                'SOURCE = """import sqlalchemy\\nfrom fastapi import FastAPI\\nimport requests\\nfrom kubernetes import client\\nfrom tenacity import retry\\nZITADEL\\n"""\n'
                 "\n"
                 "def test_fixture() -> None:\n"
                 "    assert SOURCE\n"
@@ -214,6 +386,136 @@ def test_check_ignores_instruction_examples_and_string_fixtures(tmp_path: Path) 
         "pytest-developer",
         "python-developer",
     ]
+
+
+def test_check_ignores_zitadel_identity_and_proxy_path_without_integration(tmp_path: Path) -> None:
+    """Foreign identity fields and VPN proxy values do not prove ZITADEL integration.
+
+    Args:
+        tmp_path: Isolated workspace parent.
+    """
+
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    _project_create(
+        workspace_root,
+        "browser-runtime",
+        {
+            "AGENTS.md": (
+                "# Repository Guidelines\n\n"
+                "## Table Of Contents\n\n"
+                "- [Required Standards](#required-standards)\n\n"
+                "## Required Standards\n\n"
+                "- `project-standards:project-foundation` applies repository-wide.\n"
+                "- `project-standards:project-instruction-developer` applies to instructions.\n"
+                "- `project-standards:python-developer` applies to Python code.\n"
+            ),
+            "runtime.py": (
+                "def proxy_url_get(zitadel_user_id: str, vpn_config_name: str) -> str:\n"
+                '    return f"{zitadel_user_id}/{vpn_config_name}"\n'
+            ),
+        },
+    )
+
+    result = _tool_run(workspace_root)
+
+    assert result.returncode == 0
+    required_standard_list = json.loads(result.stdout)["project_list"][0]["required_standard_list"]
+    assert "zitadel-developer" not in required_standard_list
+
+
+def test_check_ignores_generic_oidc_and_zitadel_path_without_integration(tmp_path: Path) -> None:
+    """Generic OIDC code and one named path do not prove a ZITADEL boundary.
+
+    Args:
+        tmp_path: Isolated workspace parent.
+    """
+
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    _project_create(
+        workspace_root,
+        "generic-oidc",
+        {
+            "AGENTS.md": (
+                "# Repository Guidelines\n\n"
+                "## Table Of Contents\n\n"
+                "- [Required Standards](#required-standards)\n\n"
+                "## Required Standards\n\n"
+                "- `project-standards:project-foundation` applies repository-wide.\n"
+                "- `project-standards:project-instruction-developer` applies to instructions.\n"
+                "- `project-standards:typescript-developer` applies to TypeScript code.\n"
+            ),
+            "src/auth_config.ts": (
+                'import { UserManager } from "oidc-client-ts";\n'
+                'export const authority = "https://identity.example.test";\n'
+                'export const detectorSignature = "urn:zitadel:";\n'
+            ),
+        },
+    )
+    _project_create(
+        workspace_root,
+        "zitadel-path-only",
+        {
+            "AGENTS.md": (
+                "# Repository Guidelines\n\n"
+                "## Table Of Contents\n\n"
+                "- [Required Standards](#required-standards)\n\n"
+                "## Required Standards\n\n"
+                "- `project-standards:project-foundation` applies repository-wide.\n"
+                "- `project-standards:project-instruction-developer` applies to instructions.\n"
+            ),
+            "deploy/zitadel/values.yaml": "replicaCount: 1\n",
+        },
+    )
+
+    result = _tool_run(workspace_root)
+
+    assert result.returncode == 0
+    for report in json.loads(result.stdout)["project_list"]:
+        assert "zitadel-developer" not in report["required_standard_list"]
+
+
+def test_check_skips_gitlink_directories_during_integration_scan(tmp_path: Path) -> None:
+    """Gitlink paths are metadata entries rather than readable source files.
+
+    Args:
+        tmp_path: Isolated workspace parent.
+    """
+
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    project_path = _project_create(
+        workspace_root,
+        "host",
+        {
+            "AGENTS.md": (
+                "# Repository Guidelines\n\n"
+                "## Table Of Contents\n\n"
+                "- [Required Standards](#required-standards)\n\n"
+                "## Required Standards\n\n"
+                "- `project-standards:project-foundation` applies repository-wide.\n"
+                "- `project-standards:project-instruction-developer` applies to instructions.\n"
+            ),
+        },
+    )
+    gitlink_path = project_path / "base_api_schema"
+    gitlink_path.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], check=True, cwd=gitlink_path)
+    (gitlink_path / "README.md").write_text("# Provider\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], check=True, cwd=gitlink_path)
+    subprocess.run(
+        ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "initial"],
+        check=True,
+        cwd=gitlink_path,
+    )
+    subprocess.run(["git", "add", "base_api_schema"], capture_output=True, check=True, cwd=project_path, text=True)
+
+    result = _tool_run(workspace_root)
+
+    assert result.returncode == 0
+    report = json.loads(result.stdout)["project_list"][0]
+    assert report["required_standard_list"] == ["project-foundation", "project-instruction-developer"]
 
 
 def test_check_reports_unavailable_declared_provider_skill(tmp_path: Path) -> None:

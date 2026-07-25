@@ -11,6 +11,8 @@
 
 - Always select `project-foundation` and `project-instruction-developer`.
 - Select other capabilities from actual tracked entities, technologies, boundaries, artifact families, and workflows.
+- Select `kubernetes-developer` for real Kubernetes resource manifests, Helm chart or template structure, Kustomize configuration, or executable Kubernetes-client use. Documentation prose and string fixtures are not Kubernetes integration evidence.
+- Select `zitadel-developer` for actual ZITADEL deployment or configuration structure, a dedicated ZITADEL client boundary, or executable OIDC configuration explicitly bound to ZITADEL. Generic OIDC dependencies, documentation, fixtures, identifiers, path values, proxy names, and persisted foreign identity fields are not ZITADEL integration evidence by themselves.
 - A missing applicable capability is a validation failure unless the project records an explicit user-authorized exception.
 - Do not infer application modernization from classification. Existing unmodeled Python remains `Legacy` until an explicit migration changes its owner.
 - Do not select a capability only for symmetry.
