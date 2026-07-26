@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
-from typing import TypedDict
+from typing import Sequence, TypedDict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "lib"))
 
@@ -60,27 +60,14 @@ def main() -> int:
 class ProjectReport(TypedDict):
     """Store exact mechanical metadata for one discovered project."""
 
-    baseline_missing_standard_list: list[str]
-    declared_standard_list: list[str]
+    baseline_missing_project_standard_list: list[str]
+    declared_project_standard_list: list[str]
     git_common_dir: Path
     mechanical_status: str
     missing_root_instruction_list: list[str]
     path: Path
     task_root_issue_list: list[str]
-    unavailable_standard_list: list[str]
-
-
-def _missing_root_instruction_list_get(agents_path: Path) -> list[str]:
-    """Return exact root instruction file-presence issues.
-
-    Args:
-        agents_path: Root project instruction path.
-
-    Returns:
-        Missing metadata identifiers.
-    """
-
-    return [] if agents_path.is_file() else ["AGENTS.md"]
+    unavailable_project_standard_list: list[str]
 
 
 def _available_standard_set_get() -> set[str]:
@@ -93,7 +80,7 @@ def _available_standard_set_get() -> set[str]:
     return {path.name for path in STANDARD_SKILL_ROOT.iterdir() if path.is_dir() and (path / "SKILL.md").is_file()}
 
 
-def _git_output_get(project_path: Path, argument_list: list[str]) -> str:
+def _git_output_get(project_path: Path, argument_list: Sequence[str]) -> str:
     """Run one read-only Git command.
 
     Args:
@@ -110,6 +97,19 @@ def _git_output_get(project_path: Path, argument_list: list[str]) -> str:
         check=True,
         text=True,
     ).stdout.strip()
+
+
+def _missing_root_instruction_list_get(agents_path: Path) -> list[str]:
+    """Return exact root instruction file-presence issues.
+
+    Args:
+        agents_path: Root project instruction path.
+
+    Returns:
+        Missing metadata identifiers.
+    """
+
+    return [] if agents_path.is_file() else ["AGENTS.md"]
 
 
 def _task_root_issue_list_get(project_path: Path) -> list[str]:
@@ -185,23 +185,25 @@ class ProjectStandardInventory:
         """
 
         agents_path = project_path / "AGENTS.md"
-        declared_standard_list = required_standard_name_list_get(agents_path)
-        baseline_missing_standard_list = sorted(set(BASELINE_REQUIRED_STANDARD_TUPLE) - set(declared_standard_list))
+        declared_project_standard_list = required_standard_name_list_get(agents_path)
+        baseline_missing_project_standard_list = sorted(
+            set(BASELINE_REQUIRED_STANDARD_TUPLE) - set(declared_project_standard_list)
+        )
         missing_root_instruction_list = _missing_root_instruction_list_get(agents_path)
         task_root_issue_list = _task_root_issue_list_get(project_path)
-        unavailable_standard_list = sorted(set(declared_standard_list) - self._available_standard_set)
+        unavailable_project_standard_list = sorted(set(declared_project_standard_list) - self._available_standard_set)
         if (
-            baseline_missing_standard_list
+            baseline_missing_project_standard_list
             or missing_root_instruction_list
             or task_root_issue_list
-            or unavailable_standard_list
+            or unavailable_project_standard_list
         ):
             mechanical_status = "finding"
         else:
             mechanical_status = "clean"
         return ProjectReport(
-            baseline_missing_standard_list=baseline_missing_standard_list,
-            declared_standard_list=declared_standard_list,
+            baseline_missing_project_standard_list=baseline_missing_project_standard_list,
+            declared_project_standard_list=declared_project_standard_list,
             git_common_dir=Path(
                 _git_output_get(project_path, ["rev-parse", "--path-format=absolute", "--git-common-dir"])
             ).resolve(),
@@ -209,7 +211,7 @@ class ProjectStandardInventory:
             missing_root_instruction_list=missing_root_instruction_list,
             path=project_path,
             task_root_issue_list=task_root_issue_list,
-            unavailable_standard_list=unavailable_standard_list,
+            unavailable_project_standard_list=unavailable_project_standard_list,
         )
 
     def report_print(self, workspace_report: WorkspaceReport) -> None:
@@ -226,15 +228,17 @@ class ProjectStandardInventory:
                     "mechanical_status": workspace_report["mechanical_status"],
                     "project_list": [
                         {
-                            "baseline_missing_standard_list": project_report["baseline_missing_standard_list"],
-                            "declared_standard_list": project_report["declared_standard_list"],
+                            "baseline_missing_project_standard_list": project_report[
+                                "baseline_missing_project_standard_list"
+                            ],
+                            "declared_project_standard_list": project_report["declared_project_standard_list"],
                             "git_common_dir": str(project_report["git_common_dir"]),
                             "mechanical_status": project_report["mechanical_status"],
                             "missing_root_instruction_list": project_report["missing_root_instruction_list"],
                             "path": str(project_report["path"]),
                             "semantic_audit_required": True,
                             "task_root_issue_list": project_report["task_root_issue_list"],
-                            "unavailable_standard_list": project_report["unavailable_standard_list"],
+                            "unavailable_project_standard_list": project_report["unavailable_project_standard_list"],
                         }
                         for project_report in workspace_report["project_report_list"]
                     ],
@@ -261,9 +265,7 @@ class ProjectStandardInventory:
         duplicate_git_common_dir_list = sorted(
             str(path) for path, count in common_dir_count_by_path_map.items() if count > 1
         )
-        if duplicate_git_common_dir_list or any(
-            project_report["mechanical_status"] != "clean" for project_report in project_report_list
-        ):
+        if any(project_report["mechanical_status"] != "clean" for project_report in project_report_list):
             mechanical_status = "finding"
         else:
             mechanical_status = "clean"

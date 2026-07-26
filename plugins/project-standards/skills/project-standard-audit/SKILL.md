@@ -7,7 +7,7 @@ description: Use when semantically auditing one repository or workspace for requ
 
 Read `references/project-standard-audit.md` completely.
 
-Run `project-standardize --workspace-root <workspace-root> --check` and `project-standard-check --project-root <repository-root> --scope all` as the separate mechanical phase. Treat their output only as mechanical evidence.
+Run the `project-standards:project-standardize` owner command `<project-standardize-skill-root>/scripts/project_standardize.py --workspace-root <workspace-root> --check` and `project-standard-check --project-root <repository-root> --scope all` as the separate mechanical phase. Treat their output only as mechanical evidence.
 
 Build the semantic phase independently from the complete current owner set, never from checker identities, checker findings, previously noticed concerns, or a prior audit. Enumerate every selected provider rule family, every project-local normative section, every mapped owner path, every referenced design boundary, and every candidate applicable provider not yet selected. Give each requirement one semantic verdict with current evidence or one explicit not-applicable reason.
 

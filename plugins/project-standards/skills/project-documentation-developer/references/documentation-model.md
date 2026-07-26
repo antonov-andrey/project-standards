@@ -9,6 +9,6 @@
 - `.spec`
   - Meaning: one ignored harness-neutral root for task pairs regardless of task state.
   - Pair shape: `.spec/YYYY-MM-DD-<semantic-name>-spec.md` and `.spec/YYYY-MM-DD-<semantic-name>-goal.md`.
-  - Git boundary: the repository MUST use the exact root-level ignore rule `/.spec/`, and files under `.spec/` MUST remain untracked.
+  - Git boundary: the repository's root `.gitignore` MUST actually ignore the root `.spec` directory, files under `.spec/` MUST remain untracked, and no particular equivalent Git ignore pattern is required.
   - Lifecycle: task pairs are retained after every state transition, including completion or abandonment, and MUST NOT be deleted unless the user explicitly requests their deletion.
   - Boundary: a multi-repository task keeps one pair in its coordinating repository.

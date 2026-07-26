@@ -80,7 +80,8 @@
 ## External Standard Reference Rules
 
 - `Required Standards` is the single project-local owner of the external standards selected by one governed `AGENTS.md`.
-- Each entry in `Required Standards` MUST name one provider-qualified skill and state its project applicability without copying the skill contract.
+- Its canonical machine-readable section heading MUST be exactly `## Required Standards`.
+- Every selection declaration in `Required Standards` MUST be one top-level Markdown bullet beginning with `- `, name each selected provider-qualified skill in inline code, and state its project applicability without copying the skill contract. One bullet MAY group skills that have the same applicability statement.
 - Every governed project MUST declare:
   - `project-standards:project-foundation` for all project work;
   - `project-standards:project-instruction-developer` for reading, interpreting, auditing, or changing project instructions.

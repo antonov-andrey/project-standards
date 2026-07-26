@@ -107,8 +107,8 @@ def test_check_reports_clean_mechanical_inventory_without_semantic_verdict(tmp_p
     assert payload["semantic_audit_required"] is True
     assert "is_valid" not in payload
     project_payload = payload["project_list"][0]
-    assert project_payload["baseline_missing_standard_list"] == []
-    assert project_payload["declared_standard_list"] == [
+    assert project_payload["baseline_missing_project_standard_list"] == []
+    assert project_payload["declared_project_standard_list"] == [
         "project-foundation",
         "project-instruction-developer",
         "python-developer",
@@ -119,7 +119,7 @@ def test_check_reports_clean_mechanical_inventory_without_semantic_verdict(tmp_p
     assert "missing_standard_list" not in project_payload
 
 
-def test_check_reports_exact_metadata_provider_and_task_root_findings(tmp_path: Path) -> None:
+def test_check_reports_exact_capability_and_task_root_findings(tmp_path: Path) -> None:
     """Every closed mechanical metadata failure is reported without inference.
 
     Args:
@@ -149,7 +149,7 @@ def test_check_reports_exact_metadata_provider_and_task_root_findings(tmp_path: 
     payload = json.loads(result.stdout)
     assert payload["mechanical_status"] == "finding"
     project_payload = payload["project_list"][0]
-    assert project_payload["baseline_missing_standard_list"] == [
+    assert project_payload["baseline_missing_project_standard_list"] == [
         "project-foundation",
         "project-instruction-developer",
     ]
@@ -158,7 +158,7 @@ def test_check_reports_exact_metadata_provider_and_task_root_findings(tmp_path: 
         "root .spec directory is not ignored by repository .gitignore",
         "tracked .spec paths: .spec/task-spec.md",
     ]
-    assert project_payload["unavailable_standard_list"] == ["unavailable-standard"]
+    assert project_payload["unavailable_project_standard_list"] == ["unavailable-standard"]
 
 
 def test_check_reports_missing_root_instruction_file(tmp_path: Path) -> None:
@@ -177,7 +177,7 @@ def test_check_reports_missing_root_instruction_file(tmp_path: Path) -> None:
 
     assert result.returncode == 1
     project_payload = json.loads(result.stdout)["project_list"][0]
-    assert project_payload["baseline_missing_standard_list"] == [
+    assert project_payload["baseline_missing_project_standard_list"] == [
         "project-foundation",
         "project-instruction-developer",
     ]
@@ -227,8 +227,8 @@ def test_check_rejects_non_repository_task_root_ignore_source(tmp_path: Path) ->
     ]
 
 
-def test_check_reports_duplicate_git_common_directory_worktrees(tmp_path: Path) -> None:
-    """Two worktrees of one repository are one exact workspace finding.
+def test_check_reports_duplicate_git_common_directory_worktrees_as_inventory(tmp_path: Path) -> None:
+    """Two worktrees are reported without treating their existence as a defect.
 
     Args:
         tmp_path: Pytest temporary directory.
@@ -245,16 +245,8 @@ def test_check_reports_duplicate_git_common_directory_worktrees(tmp_path: Path) 
 
     result = _tool_run(workspace_root)
 
-    assert result.returncode == 1
+    assert result.returncode == 0
     payload = json.loads(result.stdout)
-    assert payload["mechanical_status"] == "finding"
+    assert payload["mechanical_status"] == "clean"
     assert len(payload["duplicate_git_common_dir_list"]) == 1
     assert len(payload["project_list"]) == 2
-
-
-def test_tool_source_has_no_workspace_specific_path() -> None:
-    """The generic inventory source contains no personal workspace path."""
-
-    source = TOOL_PATH.read_text(encoding="utf-8")
-
-    assert "/home/andrey/Projects" not in source

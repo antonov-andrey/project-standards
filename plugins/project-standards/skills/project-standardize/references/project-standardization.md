@@ -9,7 +9,8 @@
 
 ## Mechanical Inventory
 
-- Mechanically verify root `AGENTS.md` presence, the closed baseline selection of `project-foundation` and `project-instruction-developer`, availability of every declared provider, actual Git ignore behavior for the root `.spec` directory from the repository's root `.gitignore`, absence of tracked `.spec` artifacts, and duplicate Git common-directory worktrees.
+- Mechanically verify root `AGENTS.md` presence, the closed baseline selection of `project-foundation` and `project-instruction-developer`, availability of every declared `project-standards:*` capability in the current provider, actual Git ignore behavior for the root `.spec` directory from the repository's root `.gitignore`, and absence of tracked `.spec` artifacts.
+- Report duplicate Git common-directory worktrees as inventory evidence. Their existence is not a finding by itself; mutation of two such worktrees in one run is forbidden and belongs to execution-scope control.
 - Table-of-contents structure, instruction meaning, applicability wording, and semantic completeness are outside the script and MUST be audited semantically.
 - Report these results only as mechanical inventory.
 - Do not inspect imports, filenames, dependencies, manifests, prose tokens, or selected framework examples to infer applicable standards.
@@ -27,6 +28,6 @@
 
 ## Verification
 
-- Report repository path, Git common directory, declared capabilities, baseline omissions, unavailable providers, missing root instructions, task-root findings, and duplicate common-directory worktrees.
+- Report repository path, Git common directory, `declared_project_standard_list`, `baseline_missing_project_standard_list`, `unavailable_project_standard_list`, missing root instructions, task-root findings, and duplicate common-directory worktrees.
 - Output `mechanical_status` and `semantic_audit_required=true`; never output `is_valid` for whole-project conformance.
 - Run the mechanical inventory and complete semantic audit in every standardization acceptance. Neither phase replaces the other.
