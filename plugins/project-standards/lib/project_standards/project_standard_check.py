@@ -1,4 +1,4 @@
-"""Run selected provider and submodule conformance checks without mutations."""
+"""Run selected exact provider and Submodule mechanical checks without mutations."""
 
 from __future__ import annotations
 
@@ -33,19 +33,6 @@ CHECKER_SUPPORTED_FIELD_SET = CHECKER_REQUIRED_FIELD_SET | {
 DISTRIBUTION_NAME = "project-standards"
 PROTOCOL_VERSION = 1
 SCOPE_STRATEGY_SET = {"full-on-change", "path-local"}
-
-
-def _args_parse() -> argparse.Namespace:
-    """Parse the exact public checker-runner command line.
-
-    Returns:
-        Parsed command-line namespace.
-    """
-
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--project-root", required=True, type=Path, help="Exact target Git worktree root.")
-    parser.add_argument("--scope", choices=("all", "changed"), required=True, help="Repository scope to check.")
-    return parser.parse_args()
 
 
 def _capability_checker_config_list_collect(
@@ -154,14 +141,17 @@ def _checker_finding_list_get(
         protocol_version=PROTOCOL_VERSION,
         scope=scope,
     )
-    result = subprocess.run(
-        [sys.executable, str(checker_config["script_path"])],
-        capture_output=True,
-        check=False,
-        cwd=project_root,
-        input=json.dumps(request, ensure_ascii=False, separators=(",", ":"), sort_keys=True),
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            [sys.executable, str(checker_config["script_path"])],
+            capture_output=True,
+            check=False,
+            cwd=project_root,
+            input=json.dumps(request, ensure_ascii=False, separators=(",", ":"), sort_keys=True),
+            text=True,
+        )
+    except OSError as error:
+        raise ValueError(f"Unable to launch checker process: {error}") from error
     stdout = result.stdout
     stderr = result.stderr.strip()
     if result.returncode == 2:
@@ -245,7 +235,6 @@ def _checker_path_list_get(
     """
 
     visible_all_path_list = _checker_visible_path_list_get(
-        checker_config=checker_config,
         path_list=all_path_list,
         submodule_name_by_path_map=submodule_name_by_path_map,
     )
@@ -266,23 +255,19 @@ def _checker_path_list_get(
 
 
 def _checker_visible_path_list_get(
-    checker_config: ProjectStandardCheckerConfig,
     path_list: list[str],
     submodule_name_by_path_map: dict[str, str],
 ) -> list[str]:
-    """Return paths visible to a capability or host-conformance checker.
+    """Return consumer-owned paths visible to one capability or Submodule host checker.
 
     Args:
-        checker_config: Normalized checker declaration.
         path_list: Candidate consumer and direct-submodule paths.
         submodule_name_by_path_map: Direct submodule names keyed by relative path.
 
     Returns:
-        Original paths for a capability or consumer-owned paths for a host checker.
+        Consumer-owned paths outside direct Submodule roots.
     """
 
-    if not checker_config["owner_repository_path"]:
-        return path_list
     return [
         relative_path
         for relative_path in path_list
@@ -529,7 +514,7 @@ def _result_print(
     Args:
         checker_count: Number of invoked checker processes.
         execution_error_list: Collected runner and checker errors.
-        finding_list: Collected conformance findings.
+        finding_list: Collected mechanical findings.
         scope: Requested runner scope.
     """
 
@@ -543,15 +528,21 @@ def _result_print(
             finding["message"],
         )
     )
-    status = "error" if execution_error_list else "finding" if finding_list else "ok"
+    if execution_error_list:
+        mechanical_status = "error"
+    elif finding_list:
+        mechanical_status = "finding"
+    else:
+        mechanical_status = "clean"
     print(
         json.dumps(
             {
-                "checker_count": checker_count,
-                "error_list": execution_error_list,
-                "finding_list": finding_list,
+                "mechanical_checker_count": checker_count,
+                "mechanical_error_list": execution_error_list,
+                "mechanical_finding_list": finding_list,
+                "mechanical_status": mechanical_status,
                 "scope": scope,
-                "status": status,
+                "semantic_audit_required": True,
             },
             ensure_ascii=False,
             separators=(",", ":"),
@@ -600,7 +591,7 @@ def _submodule_checker_config_list_collect(
     checker_config_list: list[ProjectStandardCheckerConfig],
     execution_error_list: list[ProjectStandardExecutionError],
 ) -> None:
-    """Collect host-conformance manifests from exact direct submodule checkouts.
+    """Collect mechanical host-check manifests from exact direct Submodule checkouts.
 
     Args:
         project_root: Exact consumer repository root.
@@ -644,11 +635,24 @@ def _worktree_status_get(project_root: Path) -> str:
     )
 
 
-def main() -> int:
-    """Run all applicable checks and return the canonical aggregate exit code.
+def _args_parse() -> argparse.Namespace:
+    """Parse the exact public checker-runner command line.
 
     Returns:
-        Zero for conformance, one for findings, or two for execution errors.
+        Parsed command-line namespace.
+    """
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--project-root", required=True, type=Path, help="Exact target Git worktree root.")
+    parser.add_argument("--scope", choices=("all", "changed"), required=True, help="Repository scope to check.")
+    return parser.parse_args()
+
+
+def main() -> int:
+    """Run all applicable mechanical checks and return the aggregate exit code.
+
+    Returns:
+        Zero for a clean mechanical result, one for findings, or two for execution errors.
     """
 
     args = _args_parse()
@@ -664,10 +668,21 @@ def main() -> int:
             scope=args.scope,
         )
         return 2
-    initial_worktree_status = _worktree_status_get(project_root)
-    submodule_name_by_path_map = submodule_name_by_path_map_get(project_root)
-    all_path_list = project_relpath_list_get(project_root, scope="all")
-    changed_path_list = project_relpath_list_get(project_root, scope="changed")
+    try:
+        initial_worktree_status = _worktree_status_get(project_root)
+        submodule_name_by_path_map = submodule_name_by_path_map_get(project_root)
+        all_path_list = project_relpath_list_get(project_root, scope="all")
+        changed_path_list = project_relpath_list_get(project_root, scope="changed")
+    except ValueError as error:
+        _result_print(
+            checker_count=0,
+            execution_error_list=[
+                ProjectStandardExecutionError(id="<scope>", message=str(error), owner=DISTRIBUTION_NAME)
+            ],
+            finding_list=[],
+            scope=args.scope,
+        )
+        return 2
     checker_config_list: list[ProjectStandardCheckerConfig] = []
     execution_error_list: list[ProjectStandardExecutionError] = []
     finding_list: list[ProjectStandardFinding] = []
@@ -708,14 +723,21 @@ def main() -> int:
                     owner=checker_config["owner"],
                 )
             )
-    if _worktree_status_get(project_root) != initial_worktree_status:
+    try:
+        final_worktree_status = _worktree_status_get(project_root)
+    except ValueError as error:
         execution_error_list.append(
-            ProjectStandardExecutionError(
-                id="<mutation>",
-                message="Checker execution changed Git-visible target worktree state",
-                owner=DISTRIBUTION_NAME,
-            )
+            ProjectStandardExecutionError(id="<mutation-check>", message=str(error), owner=DISTRIBUTION_NAME)
         )
+    else:
+        if final_worktree_status != initial_worktree_status:
+            execution_error_list.append(
+                ProjectStandardExecutionError(
+                    id="<mutation>",
+                    message="Checker execution changed Git-visible target worktree state",
+                    owner=DISTRIBUTION_NAME,
+                )
+            )
     _result_print(
         checker_count=checker_count,
         execution_error_list=execution_error_list,

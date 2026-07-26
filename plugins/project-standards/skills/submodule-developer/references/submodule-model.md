@@ -18,6 +18,6 @@
 ## Verification Ownership Contract
 
 - Reusable runtime behavior of one `Submodule` MUST be tested under that `Submodule`'s local `test` root and remain runnable both standalone and through a consumer's explicit shared pytest plugin.
-- A `Submodule` whose stable host contract has a mechanically enforceable subset MAY expose one root `project-standard-check.toml` manifest and owner-local checker implementation under its `tool/**`; that manifest and checker follow root `DESIGN.md`, section `Манифест И Протокол Процесса`.
-- One submodule host-conformance checker receives the consumer project root through the shared checker protocol, validates only the mechanically enforceable subset of the submodule's own `DESIGN.md` host contract, and remains read-only.
-- Consumer repositories MUST NOT copy one submodule-owned runtime behavior test or host-conformance checker into their own `test/code/**`.
+- A `Submodule` whose stable host contract contains one independently normative closed predicate with a complete deterministic implementation MAY expose one root `project-standard-check.toml` manifest and owner-local checker implementation under its `tool/**`; that manifest and checker follow root `DESIGN.md`, section `Манифест И Протокол Процесса`.
+- One Submodule mechanical host checker receives the consumer project root through the shared checker protocol, decides only that exact predicate from the Submodule's own `DESIGN.md`, and remains read-only. Host-contract requirements that require semantic inference MUST NOT be approximated by name lists, path lists, thresholds, or signal detection.
+- Consumer repositories MUST NOT copy one Submodule-owned runtime behavior test or mechanical host checker into their own `test/code/**`.

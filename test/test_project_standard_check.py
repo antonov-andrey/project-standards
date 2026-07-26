@@ -259,11 +259,12 @@ def test_runner_returns_zero_for_one_successful_selected_checker(
 
     assert exit_code == 0
     assert payload == {
-        "checker_count": 1,
-        "error_list": [],
-        "finding_list": [],
+        "mechanical_checker_count": 1,
+        "mechanical_error_list": [],
+        "mechanical_finding_list": [],
+        "mechanical_status": "clean",
         "scope": "all",
-        "status": "ok",
+        "semantic_audit_required": True,
     }
 
 
@@ -296,8 +297,8 @@ def test_runner_enriches_and_sorts_one_checker_finding(
     )
 
     assert exit_code == 1
-    assert payload["status"] == "finding"
-    assert payload["finding_list"] == [
+    assert payload["mechanical_status"] == "finding"
+    assert payload["mechanical_finding_list"] == [
         {
             "id": "python.finding",
             "line": 1,
@@ -340,10 +341,10 @@ def test_runner_collects_finding_after_another_checker_protocol_error(
     )
 
     assert exit_code == 2
-    assert payload["checker_count"] == 2
-    assert payload["error_list"][0]["id"] == "python.error"
-    assert payload["finding_list"][0]["id"] == "python.finding"
-    assert payload["status"] == "error"
+    assert payload["mechanical_checker_count"] == 2
+    assert payload["mechanical_error_list"][0]["id"] == "python.error"
+    assert payload["mechanical_finding_list"][0]["id"] == "python.finding"
+    assert payload["mechanical_status"] == "error"
 
 
 def test_runner_detects_checker_worktree_mutation(
@@ -375,7 +376,7 @@ def test_runner_detects_checker_worktree_mutation(
     )
 
     assert exit_code == 2
-    assert payload["error_list"] == [
+    assert payload["mechanical_error_list"] == [
         {
             "id": "<mutation>",
             "message": "Checker execution changed Git-visible target worktree state",
@@ -429,8 +430,8 @@ def test_changed_scope_skips_selected_checker_without_applicable_changes(
     )
 
     assert exit_code == 0
-    assert payload["checker_count"] == 0
-    assert payload["status"] == "ok"
+    assert payload["mechanical_checker_count"] == 0
+    assert payload["mechanical_status"] == "clean"
 
 
 def test_runner_rejects_non_root_and_missing_project_paths(
@@ -458,9 +459,62 @@ def test_runner_rejects_non_root_and_missing_project_paths(
             scope="all",
         )
         assert exit_code == 2
-        assert payload["checker_count"] == 0
-        assert payload["error_list"][0]["id"] == "<project-root>"
-        assert payload["status"] == "error"
+        assert payload["mechanical_checker_count"] == 0
+        assert payload["mechanical_error_list"][0]["id"] == "<project-root>"
+        assert payload["mechanical_status"] == "error"
+
+
+def test_runner_reports_scope_resolution_failure_as_deterministic_error(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A Git scope failure returns the structured runner error contract.
+
+    Args:
+        capsys: Pytest output capture fixture.
+        monkeypatch: Pytest monkeypatch fixture.
+        tmp_path: Pytest temporary directory.
+    """
+
+    project_root = _project_create(tmp_path)
+
+    def project_relpath_list_get(project_root: Path, scope: str) -> list[str]:
+        """Raise the synthetic scope failure.
+
+        Args:
+            project_root: Exact project root.
+            scope: Requested path scope.
+
+        Returns:
+            Repository paths when resolution succeeds.
+
+        Raises:
+            ValueError: Always for this failure fixture.
+        """
+
+        raise ValueError(f"unable to resolve {scope} paths below {project_root}")
+
+    monkeypatch.setattr(project_standard_check, "project_relpath_list_get", project_relpath_list_get)
+
+    exit_code, payload = _runner_run(
+        capsys,
+        monkeypatch,
+        project_root,
+        tmp_path / "distribution",
+        scope="all",
+    )
+
+    assert exit_code == 2
+    assert payload["mechanical_checker_count"] == 0
+    assert payload["mechanical_error_list"] == [
+        {
+            "id": "<scope>",
+            "message": f"unable to resolve all paths below {project_root}",
+            "owner": "project-standards",
+        }
+    ]
+    assert payload["mechanical_status"] == "error"
 
 
 def test_runner_reports_invalid_manifest_and_missing_checker_script(
@@ -498,9 +552,9 @@ def test_runner_reports_invalid_manifest_and_missing_checker_script(
     )
 
     assert exit_code == 2
-    assert payload["checker_count"] == 0
-    assert payload["error_list"][0]["id"] == "<manifest>"
-    assert "does not match" in payload["error_list"][0]["message"]
+    assert payload["mechanical_checker_count"] == 0
+    assert payload["mechanical_error_list"][0]["id"] == "<manifest>"
+    assert "does not match" in payload["mechanical_error_list"][0]["message"]
 
     manifest_path.write_text(
         manifest_path.read_text(encoding="utf-8").replace(
@@ -518,8 +572,8 @@ def test_runner_reports_invalid_manifest_and_missing_checker_script(
         scope="all",
     )
     assert exit_code == 2
-    assert payload["checker_count"] == 0
-    assert "owner-local file" in payload["error_list"][0]["message"]
+    assert payload["mechanical_checker_count"] == 0
+    assert "owner-local file" in payload["mechanical_error_list"][0]["message"]
 
 
 @pytest.mark.parametrize(
@@ -565,9 +619,9 @@ def test_runner_maps_every_checker_exit_contract_to_execution_error(
     )
 
     assert exit_code == 2
-    assert payload["checker_count"] == 1
-    assert message in payload["error_list"][0]["message"]
-    assert payload["status"] == "error"
+    assert payload["mechanical_checker_count"] == 1
+    assert message in payload["mechanical_error_list"][0]["message"]
+    assert payload["mechanical_status"] == "error"
 
 
 def test_runner_ignores_unselected_capability_and_sorts_checkers_and_findings(
@@ -606,14 +660,16 @@ def test_runner_ignores_unselected_capability_and_sorts_checkers_and_findings(
     )
 
     assert exit_code == 1
-    assert payload["checker_count"] == 2
-    assert [(finding["id"], finding["path"], finding.get("line")) for finding in payload["finding_list"]] == [
+    assert payload["mechanical_checker_count"] == 2
+    assert [
+        (finding["id"], finding["path"], finding.get("line")) for finding in payload["mechanical_finding_list"]
+    ] == [
         ("python.alpha", "a.py", 8),
         ("python.alpha", "z.py", None),
         ("python.zeta", "a.py", 8),
         ("python.zeta", "z.py", None),
     ]
-    assert payload["status"] == "finding"
+    assert payload["mechanical_status"] == "finding"
 
 
 def test_runner_executes_checker_with_current_python_without_shell(
@@ -660,7 +716,7 @@ def test_runner_executes_checker_with_current_python_without_shell(
     )
 
     assert exit_code == 0
-    assert payload["checker_count"] == 1
+    assert payload["mechanical_checker_count"] == 1
     assert len(call_list) == 1
     argument_list, keyword_by_name_map = call_list[0]
     assert argument_list == [sys.executable, str((asset_root / "scripts" / "python_success.py").resolve())]
@@ -669,6 +725,15 @@ def test_runner_executes_checker_with_current_python_without_shell(
     request = json.loads(str(keyword_by_name_map["input"]))
     assert request["project_root"] == str(project_root)
     assert request["path_list"] == ["app.py"]
+
+
+def test_capability_checker_scope_excludes_direct_submodule_code() -> None:
+    """A consumer capability checker never classifies code owned by a Submodule."""
+
+    assert project_standard_check._checker_visible_path_list_get(
+        path_list=["app.py", "provider", "provider/module.py"],
+        submodule_name_by_path_map={"provider": "provider"},
+    ) == ["app.py"]
 
 
 def test_runner_discovers_direct_submodule_host_checker(
@@ -719,5 +784,5 @@ def test_runner_discovers_direct_submodule_host_checker(
     )
 
     assert exit_code == 0
-    assert payload["checker_count"] == 1
-    assert payload["status"] == "ok"
+    assert payload["mechanical_checker_count"] == 1
+    assert payload["mechanical_status"] == "clean"

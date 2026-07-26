@@ -38,7 +38,9 @@
 - Project-code changes MUST run targeted checks that directly exercise the changed behavior in addition to the applicable ordinary handoff suite.
 - Instruction-only and documentation-only changes that do not change executable behavior MUST use explicit semantic reread of the changed text and its directly referenced canonical owners plus applicable non-test artifact validation; they do not require a Product test suite only because prose changed.
 - Structural owner moves MUST verify the new owner, removal of the old owner, and every directly dependent instruction, documentation, test, tool, dependency, and consumer boundary.
-- A mechanical standard check is evidence only for the mechanically encoded subset of its owning contract and MUST NOT replace semantic review.
+- A mechanical standard check is evidence only for independently normative closed predicates that its implementation decides completely. It MUST identify its result as mechanical and MUST NOT replace, narrow, seed, or close semantic review.
+- Semantic verification MUST derive its coverage independently from the complete applicable owner contracts. A checker inventory, successful command, implementation plan, previous audit, or already known finding list MUST NOT define or limit semantic scope.
+- When one task requires semantic acceptance after fixes, every fix invalidates the prior semantic completion pass. After applicable mechanical verification, repeat the complete semantic review from owner discovery until one fresh pass finds no violation and no uncovered requirement.
 - After fixing one failed verification target, rerun that same target before running broader partial or full verification.
 - Do not hand off while required verification is failing. Fix repository-local fallout in the same task; report a blocker only when remediation depends on unavailable external state, lies outside the authorized repository boundary, or requires an unapproved semantic contract change.
 - One command may be reported as `Pass` only when it exited successfully. Report warnings and other material diagnostics explicitly.

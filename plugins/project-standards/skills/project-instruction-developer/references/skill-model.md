@@ -20,9 +20,12 @@ One provider path `plugins/<plugin_name>/lib/<owner>/` is a `Self-contained` plu
 ## Executable Standard Ownership
 
 - A capability `Skill` that owns one mechanically enforceable standard subset MAY declare one owner-local `<skill-root>/checker.toml`.
+- One mechanically enforceable subset is eligible only when it is an independently normative closed predicate and its checker is one complete deterministic decision procedure over the entire declared scope.
+- A checker MUST NOT infer intent, semantics, applicability, ownership, necessity, quality, or exceptions from selected names, paths, examples, thresholds, allowlists, or smell signals. A finite set is allowed only when the normative rule itself defines that exact exhaustive set.
+- When a rule cannot satisfy that eligibility contract, it remains entirely semantic and MUST NOT have one approximate checker. Passing samples or suppressing false positives does not make an approximation eligible.
 - `<skill-root>/checker.toml` identifies only checker scripts owned under that same skill root. It MUST NOT restate semantic rules, consumer-specific exceptions, or project-local paths.
 - Checker implementation, samples, and checker behavior tests remain under the owning skill root. A second skill MUST reference or reuse the real owner instead of copying its checker.
 - Shared checker discovery, scope resolution, process execution, and diagnostic protocol belong to one plugin support owner under `plugins/project-standards/lib/project_standards/`.
 - The shared runner discovers checker manifests only for capabilities already selected by the consumer's `Required Standards`; checker discovery MUST NOT create a second standard-selection map.
 - Exact manifest schema, scope strategies, process transport, diagnostics, and failure semantics are owned by root `DESIGN.md`, section `Манифест И Протокол Процесса`.
-- Mechanical checker success does not prove semantic conformance and MUST NOT replace an applicable semantic audit.
+- Mechanical checker output MUST identify itself as mechanical evidence. Mechanical success does not prove semantic conformance and MUST NOT replace, narrow, seed, or close an applicable semantic audit.

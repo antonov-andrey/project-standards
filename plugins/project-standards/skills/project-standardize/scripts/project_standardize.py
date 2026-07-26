@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
-"""Discover Git projects and validate provider-qualified project standards."""
+"""Discover Git projects and report exact mechanical standard metadata."""
 
 from __future__ import annotations
 
 import argparse
-import ast
 import json
 from pathlib import Path
-import re
 import subprocess
 import sys
 from typing import TypedDict
@@ -16,38 +14,27 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "lib"))
 
 from project_standards import required_standard_name_list_get
 
-ALWAYS_REQUIRED_STANDARD_TUPLE = ("project-foundation", "project-instruction-developer")
-NON_RUNTIME_PATH_PART_SET = {
-    ".spec",
-    "design",
-    "doc",
-    "docs",
-    "example",
-    "examples",
-    "fixture",
-    "fixtures",
-    "test",
-    "tests",
-}
-PLUGIN_NAME = "project-standards"
-REQUIRED_HEADING = "## Required Standards"
-SOURCE_SUFFIX_SET = {".go", ".java", ".js", ".jsx", ".kt", ".kts", ".py", ".rs", ".ts", ".tsx"}
+BASELINE_REQUIRED_STANDARD_TUPLE = ("project-foundation", "project-instruction-developer")
 STANDARD_SKILL_ROOT = Path(__file__).resolve().parents[2]
-STRUCTURED_CONFIG_SUFFIX_SET = {".json", ".yaml", ".yml"}
-TABLE_OF_CONTENTS_HEADING = "## Table Of Contents"
+TASK_ROOT_IGNORE_RULE = "/.spec/"
 
 
 def _args_parse() -> argparse.Namespace:
-    """Parse command-line arguments.
+    """Parse the read-only workspace inventory command line.
 
     Returns:
-        Parsed standardization arguments.
+        Parsed command-line namespace.
     """
 
     parser = argparse.ArgumentParser(description=__doc__)
-    mode_group = parser.add_mutually_exclusive_group()
-    mode_group.add_argument("--check", action="store_true", help="Validate without writes; this is the default.")
-    mode_group.add_argument("--write", action="store_true", help="Add missing standard selections and validate again.")
+    parser.add_argument(
+        "--check",
+        action="store_const",
+        const=True,
+        dest=argparse.SUPPRESS,
+        required=True,
+        help="Run the read-only mechanical inventory.",
+    )
     parser.add_argument(
         "--workspace-root",
         required=True,
@@ -57,139 +44,54 @@ def _args_parse() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def main() -> int:
+    """Print one workspace mechanical inventory and return its status.
+
+    Returns:
+        Zero for a clean mechanical result, otherwise one.
+    """
+
+    args = _args_parse()
+    inventory = ProjectStandardInventory(args.workspace_root.resolve())
+    workspace_report = inventory.workspace_report_get()
+    inventory.report_print(workspace_report)
+    return int(workspace_report["mechanical_status"] != "clean")
+
+
+class ProjectReport(TypedDict):
+    """Store exact mechanical metadata for one discovered project."""
+
+    baseline_missing_standard_list: list[str]
+    declared_standard_list: list[str]
+    git_common_dir: Path
+    mechanical_status: str
+    missing_root_instruction_list: list[str]
+    path: Path
+    task_root_issue_list: list[str]
+    unavailable_standard_list: list[str]
+
+
+def _missing_root_instruction_list_get(agents_path: Path) -> list[str]:
+    """Return exact root instruction file-presence issues.
+
+    Args:
+        agents_path: Root project instruction path.
+
+    Returns:
+        Missing metadata identifiers.
+    """
+
+    return [] if agents_path.is_file() else ["AGENTS.md"]
+
+
 def _available_standard_set_get() -> set[str]:
-    """Return capability skill names present in this provider installation.
+    """Return capability names present in this provider installation.
 
     Returns:
         Available provider capability names.
     """
 
     return {path.name for path in STANDARD_SKILL_ROOT.iterdir() if path.is_dir() and (path / "SKILL.md").is_file()}
-
-
-def _exist_kubernetes_integration(project_path: Path, path_list: list[str]) -> bool:
-    """Return whether executable artifacts prove one Kubernetes integration.
-
-    Args:
-        project_path: Repository worktree root.
-        path_list: Current tracked and untracked non-ignored paths.
-
-    Returns:
-        Whether Kubernetes resources, packaging, or client use exists.
-    """
-
-    for relative_path in path_list:
-        if not _is_runtime_path(relative_path):
-            continue
-        path = project_path / relative_path
-        path_name_lower = path.name.lower()
-        suffix = path.suffix.lower()
-        if path_name_lower in {"kustomization", "kustomization.yaml", "kustomization.yml"}:
-            return True
-        if suffix in STRUCTURED_CONFIG_SUFFIX_SET:
-            source_lower = path.read_text(encoding="utf-8", errors="ignore").lower()
-            if (
-                path_name_lower in {"chart.yaml", "chart.yml"}
-                and "apiversion:" in source_lower
-                and "name:" in source_lower
-            ):
-                return True
-            if re.search(r'(?m)^\s*(?:apiversion\s*:|"apiversion"\s*:)', source_lower) and re.search(
-                r'(?m)^\s*(?:kind\s*:|"kind"\s*:)', source_lower
-            ):
-                return True
-        if suffix in SOURCE_SUFFIX_SET:
-            if suffix == ".py":
-                continue
-            source_lower = path.read_text(encoding="utf-8", errors="ignore").lower()
-            if suffix in {".js", ".jsx", ".ts", ".tsx"} and re.search(
-                r"""(?m)^\s*(?:import\b[^\n]*["']@kubernetes/client-node|(?:const|let|var)\b[^\n]*=\s*require\s*\(\s*["']@kubernetes/client-node)""",
-                source_lower,
-            ):
-                return True
-            if suffix == ".go":
-                go_client_path_pattern = r'"(?:k8s\.io/client-go/[^"]+|sigs\.k8s\.io/controller-runtime/pkg/client)"'
-                if re.search(rf"(?m)^\s*import\s+(?:[._a-z][a-z0-9_]*\s+)?{go_client_path_pattern}", source_lower):
-                    return True
-                if re.search(rf"(?s)\bimport\s*\([^)]*{go_client_path_pattern}", source_lower):
-                    return True
-            if suffix in {".java", ".kt", ".kts"} and re.search(
-                r"(?m)^\s*import\s+(?:io\.fabric8\.kubernetes\.client|io\.kubernetes\.client)\.",
-                source_lower,
-            ):
-                return True
-            if suffix == ".rs" and re.search(r"(?m)^\s*use\s+kube(?:::|;)", source_lower):
-                return True
-    return False
-
-
-def _exist_zitadel_integration(project_path: Path, path_list: list[str]) -> bool:
-    """Return whether executable artifacts prove one ZITADEL integration.
-
-    Args:
-        project_path: Repository worktree root.
-        path_list: Current tracked and untracked non-ignored paths.
-
-    Returns:
-        Whether a ZITADEL deployment, client, or bound OIDC configuration exists.
-    """
-
-    identity_protocol_signal_tuple = (
-        "/v2/users",
-        "authority",
-        "fetch(",
-        "httpx",
-        "introspect",
-        "issuer",
-        "oauth",
-        "oidc",
-        "openid",
-        "react-oidc-context",
-        "requests",
-    )
-    zitadel_config_signal_tuple = (
-        "charts.zitadel.com",
-        "ghcr.io/zitadel/",
-        "registry.zitadel.cloud/",
-        "urn:zitadel:",
-    )
-    for relative_path in path_list:
-        if not _is_runtime_path(relative_path):
-            continue
-        path = project_path / relative_path
-        path_part_lower_list = [part.lower() for part in Path(relative_path).parts]
-        suffix = path.suffix.lower()
-        if suffix not in STRUCTURED_CONFIG_SUFFIX_SET | SOURCE_SUFFIX_SET or not path.is_file():
-            continue
-        source_lower = path.read_text(encoding="utf-8", errors="ignore").lower()
-        if suffix in STRUCTURED_CONFIG_SUFFIX_SET:
-            if any(signal in source_lower for signal in zitadel_config_signal_tuple):
-                return True
-            if re.search(r'(?m)^\s*"?zitadel"?\s*:', source_lower):
-                return True
-            if re.search(
-                r"(?m)^\s*-\s+name:\s+zitadel_(?:database|defaultinstance|external|firstinstance|logstore)\b",
-                source_lower,
-            ):
-                return True
-        if suffix not in SOURCE_SUFFIX_SET:
-            continue
-        if suffix in {".js", ".jsx", ".ts", ".tsx"} and re.search(
-            r"""(?m)^\s*(?:import\b[^\n]*["']@zitadel/|(?:const|let|var)\b[^\n]*=\s*require\s*\(\s*["']@zitadel/)""",
-            source_lower,
-        ):
-            return True
-        path_token_set = {
-            token
-            for path_part_lower in path_part_lower_list
-            for token in re.split(r"[^a-z0-9]+", path_part_lower)
-            if token
-        }
-        if "zitadel" not in path_token_set:
-            continue
-        if any(signal in source_lower for signal in identity_protocol_signal_tuple):
-            return True
-    return False
 
 
 def _git_output_get(project_path: Path, argument_list: list[str]) -> str:
@@ -211,449 +113,165 @@ def _git_output_get(project_path: Path, argument_list: list[str]) -> str:
     ).stdout.strip()
 
 
-def _heading_anchor_get(heading: str) -> str:
-    """Return the canonical table-of-contents anchor for one heading.
+def _task_root_issue_list_get(project_path: Path) -> list[str]:
+    """Return exact ignored task-root contract issues.
 
     Args:
-        heading: Literal Markdown heading text.
+        project_path: Canonical project worktree root.
 
     Returns:
-        Lowercase anchor with spaces converted to hyphens and punctuation removed.
+        Missing ignore-rule or tracked-task identifiers.
     """
 
-    return "".join(
-        "-" if character == " " else character.lower() if character.isalnum() else "" for character in heading
+    issue_list: list[str] = []
+    gitignore_path = project_path / ".gitignore"
+    gitignore_line_set = (
+        set(gitignore_path.read_text(encoding="utf-8").splitlines()) if gitignore_path.is_file() else set()
     )
+    if TASK_ROOT_IGNORE_RULE not in gitignore_line_set:
+        issue_list.append("missing exact /.spec/ ignore rule")
+    tracked_task_path_list = _git_output_get(project_path, ["ls-files", ".spec"]).splitlines()
+    if tracked_task_path_list:
+        issue_list.append(f"tracked .spec paths: {', '.join(tracked_task_path_list)}")
+    return issue_list
 
 
-def _is_project_report_valid(project_report: ProjectReport) -> bool:
-    """Return whether one project satisfies the machine-readable contract.
+class ProjectStandardInventory:
+    """Own read-only mechanical inventory for one explicit workspace."""
 
-    Args:
-        project_report: Project classification and validation state.
+    def __init__(self, workspace_root: Path) -> None:
+        """Initialize one inventory boundary.
 
-    Returns:
-        Whether no metadata, selection, or availability problem remains.
-    """
+        Args:
+            workspace_root: Canonical workspace directory.
+        """
 
-    return (
-        not project_report["missing_metadata_list"]
-        and not _project_report_missing_standard_list_get(project_report)
-        and not project_report["unavailable_standard_list"]
-    )
+        if not workspace_root.is_dir():
+            raise ValueError(f"Workspace root is not a directory: {workspace_root}")
+        self._available_standard_set = _available_standard_set_get()
+        self._workspace_root = workspace_root
 
+    def _project_path_list_get(self) -> list[Path]:
+        """Return immediate child Git worktrees.
 
-def _is_runtime_path(relative_path: str) -> bool:
-    """Return whether one path can represent an executable integration artifact.
+        Returns:
+            Sorted canonical worktree roots.
+        """
 
-    Args:
-        relative_path: Repository-relative path.
-
-    Returns:
-        Whether the path is outside documentation, examples, fixtures, and tests.
-    """
-
-    return not ({part.lower() for part in Path(relative_path).parts} & NON_RUNTIME_PATH_PART_SET)
-
-
-def _is_table_of_contents_valid(text: str) -> bool:
-    """Return whether one root instruction file has its exact canonical table of contents.
-
-    Args:
-        text: Complete root instruction text.
-
-    Returns:
-        Whether the table of contents is first and matches every later level-two and level-three heading.
-    """
-
-    root_heading_match = re.match(r"^# [^\n]+\n", text)
-    table_heading_match = re.search(rf"(?m)^{re.escape(TABLE_OF_CONTENTS_HEADING)}[ \t]*$", text)
-    if root_heading_match is None or table_heading_match is None:
-        return False
-    if text[root_heading_match.end() : table_heading_match.start()].strip():
-        return False
-    next_heading_match = re.search(r"(?m)^## (?!Table Of Contents[ \t]*$)", text[table_heading_match.end() :])
-    if next_heading_match is None:
-        return False
-    section_end = table_heading_match.end() + next_heading_match.start()
-    actual_entry_list = [line for line in text[table_heading_match.end() : section_end].splitlines() if line.strip()]
-    later_text = text[section_end:]
-    expected_entry_list = []
-    for heading_match in re.finditer(r"(?m)^(##|###) (.+?)[ \t]*$", later_text):
-        marker, heading = heading_match.groups()
-        indent = "" if marker == "##" else "  "
-        expected_entry_list.append(f"{indent}- [{heading}](#{_heading_anchor_get(heading)})")
-    return actual_entry_list == expected_entry_list
-
-
-def _missing_metadata_list_get(agents_path: Path) -> list[str]:
-    """Return missing root instruction metadata identifiers.
-
-    Args:
-        agents_path: Root project instruction path.
-
-    Returns:
-        Missing metadata identifiers.
-    """
-
-    if not agents_path.is_file():
-        return ["AGENTS.md", "Table Of Contents", "Required Standards"]
-    text = agents_path.read_text(encoding="utf-8")
-    missing_metadata_list: list[str] = []
-    if not _is_table_of_contents_valid(text):
-        missing_metadata_list.append("Table Of Contents")
-    if re.search(r"(?m)^## Required Standards\s*$", text) is None:
-        missing_metadata_list.append("Required Standards")
-    return missing_metadata_list
-
-
-def _project_path_list_get(workspace_root: Path) -> list[Path]:
-    """Discover immediate Git worktree children.
-
-    Args:
-        workspace_root: Explicit workspace directory.
-
-    Returns:
-        Sorted canonical candidate worktree roots.
-
-    Raises:
-        ValueError: The supplied workspace root is not a directory.
-    """
-
-    if not workspace_root.is_dir():
-        raise ValueError(f"Workspace root is not a directory: {workspace_root}")
-    return sorted(
-        (
-            child.resolve()
-            for child in workspace_root.iterdir()
-            if child.is_dir() and ((child / ".git").is_dir() or (child / ".git").is_file())
-        ),
-        key=lambda path: path.name,
-    )
-
-
-def _project_report_missing_standard_list_get(project_report: ProjectReport) -> list[str]:
-    """Return applicable standards absent from project instructions.
-
-    Args:
-        project_report: Project classification and validation state.
-
-    Returns:
-        Sorted missing standard names.
-    """
-
-    return sorted(set(project_report["required_standard_list"]) - set(project_report["declared_standard_list"]))
-
-
-def _project_report_payload_get(project_report: ProjectReport) -> dict[str, object]:
-    """Return one JSON-compatible project report.
-
-    Args:
-        project_report: Project classification and validation state.
-
-    Returns:
-        JSON-compatible report payload.
-    """
-
-    return {
-        "declared_standard_list": project_report["declared_standard_list"],
-        "git_common_dir": str(project_report["git_common_dir"]),
-        "is_valid": _is_project_report_valid(project_report),
-        "missing_metadata_list": project_report["missing_metadata_list"],
-        "missing_standard_list": _project_report_missing_standard_list_get(project_report),
-        "path": str(project_report["path"]),
-        "required_standard_list": project_report["required_standard_list"],
-        "unavailable_standard_list": project_report["unavailable_standard_list"],
-    }
-
-
-def _python_signal_set_get(project_path: Path, path_list: list[str]) -> set[str]:
-    """Collect structural Python signals without interpreting prose or string fixtures.
-
-    Args:
-        project_path: Repository worktree root.
-        path_list: Current tracked and untracked non-ignored paths.
-
-    Returns:
-        Import, name, attribute, and executable-script signals.
-    """
-
-    signal_set: set[str] = set()
-    for relative_path in path_list:
-        if not relative_path.endswith(".py"):
-            continue
-        source = (project_path / relative_path).read_text(encoding="utf-8", errors="ignore")
-        if source.startswith("#!/usr/bin/env python3"):
-            signal_set.add("shebang")
-        try:
-            tree = ast.parse(source)
-        except SyntaxError:
-            continue
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                signal_set.update(f"import:{alias.name}" for alias in node.names)
-            elif isinstance(node, ast.ImportFrom) and node.module is not None:
-                signal_set.add(f"import:{node.module}")
-            elif isinstance(node, ast.Name):
-                signal_set.add(f"name:{node.id}")
-            elif isinstance(node, ast.Attribute):
-                signal_set.add(f"attribute:{node.attr}")
-    return signal_set
-
-
-def _required_standard_list_get(project_path: Path, path_list: list[str]) -> list[str]:
-    """Classify applicable standards from current project artifacts.
-
-    Args:
-        project_path: Repository worktree root.
-        path_list: Current tracked and untracked non-ignored paths.
-
-    Returns:
-        Sorted applicable capability skill names.
-    """
-
-    required_standard_set = set(ALWAYS_REQUIRED_STANDARD_TUPLE)
-    python_path_list = [path for path in path_list if path.endswith(".py")]
-    python_signal_set = _python_signal_set_get(project_path, path_list)
-    python_import_name_set = {
-        signal.removeprefix("import:") for signal in python_signal_set if signal.startswith("import:")
-    }
-    root_agents_path = project_path / "AGENTS.md"
-    root_agents_text_lower = (
-        root_agents_path.read_text(encoding="utf-8", errors="ignore").lower() if root_agents_path.is_file() else ""
-    )
-    structured_config_text_lower = "\n".join(
-        (project_path / relative_path).read_text(encoding="utf-8", errors="ignore")
-        for relative_path in path_list
-        if (project_path / relative_path).suffix in STRUCTURED_CONFIG_SUFFIX_SET
-        and (project_path / relative_path).is_file()
-        and (project_path / relative_path).stat().st_size <= 262_144
-    ).lower()
-
-    if python_path_list:
-        required_standard_set.add("python-developer")
-    if any(path.startswith(("test/", "tests/")) and path.endswith(".py") for path in path_list) or any(
-        signal.startswith("import:pytest") for signal in python_signal_set
-    ):
-        required_standard_set.add("pytest-developer")
-    if ".gitmodules" in path_list:
-        required_standard_set.add("submodule-developer")
-    if any(path == "DESIGN.md" or path.startswith(("design/", "docs/", "doc/", "pattern/")) for path in path_list):
-        required_standard_set.add("project-documentation-developer")
-    if "`legacy`" in root_agents_text_lower or "legacy python" in root_agents_text_lower:
-        required_standard_set.add("legacy-python-maintainer")
-    if python_path_list and (
-        "shebang" in python_signal_set
-        or "import:argparse" in python_signal_set
-        or any(signal.startswith("import:config_argparse") for signal in python_signal_set)
-    ):
-        required_standard_set.add("python-cli-developer")
-    if python_path_list and (
-        "import:logging" in python_signal_set
-        or any(signal.startswith("import:config_logging") for signal in python_signal_set)
-    ):
-        required_standard_set.add("python-logging-developer")
-    if python_path_list and any(
-        signal.startswith(("import:retry_runtime", "import:requests_retry", "import:tenacity"))
-        for signal in python_signal_set
-    ):
-        required_standard_set.add("python-retry-developer")
-    if python_path_list and any(
-        signal.startswith(("import:requests", "import:httpx", "import:aiohttp", "import:urllib3"))
-        for signal in python_signal_set
-    ):
-        required_standard_set.add("http-api-client-developer")
-    if python_path_list and any(
-        signal.startswith(("import:fastapi", "import:flask", "import:django")) for signal in python_signal_set
-    ):
-        required_standard_set.add("rest-api-server-developer")
-    if python_path_list and (
-        any(signal.startswith(("import:config_env", "import:dotenv")) for signal in python_signal_set)
-        or ("import:os" in python_signal_set and bool({"attribute:environ", "attribute:getenv"} & python_signal_set))
-    ):
-        required_standard_set.add("runtime-config-developer")
-    if python_path_list and any(
-        signal.startswith(("import:sqlalchemy", "import:model_sqlalchemy", "import:config_sqlalchemy"))
-        for signal in python_signal_set
-    ):
-        required_standard_set.add("sqlalchemy-developer")
-    if any(path.endswith((".ts", ".tsx")) or path == "tsconfig.json" for path in path_list):
-        required_standard_set.add("typescript-developer")
-    if any(path.endswith(".tsx") for path in path_list):
-        required_standard_set.add("react-ui-developer")
-    if any(
-        Path(path).name in {"Dockerfile", "compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml"}
-        for path in path_list
-    ):
-        required_standard_set.add("docker-compose-developer")
-    if _exist_kubernetes_integration(project_path, path_list) or any(
-        import_name in {"kubernetes", "kubernetes_asyncio"}
-        or import_name.startswith(("kubernetes.", "kubernetes_asyncio."))
-        for import_name in python_import_name_set
-    ):
-        required_standard_set.add("kubernetes-developer")
-    if _exist_zitadel_integration(project_path, path_list) or any(
-        import_name == "zitadel" or import_name.startswith("zitadel.") for import_name in python_import_name_set
-    ):
-        required_standard_set.add("zitadel-developer")
-    if (
-        "awstemplateformatversion" in structured_config_text_lower
-        or "aws::cloudformation" in structured_config_text_lower
-    ):
-        required_standard_set.add("aws-cloudformation-developer")
-    return sorted(required_standard_set)
-
-
-def _required_standard_write(project_report: ProjectReport) -> None:
-    """Add missing selections while preserving every existing local section.
-
-    Args:
-        project_report: Project report whose missing selections should be added.
-    """
-
-    missing_standard_list = _project_report_missing_standard_list_get(project_report)
-    if not missing_standard_list:
-        return
-    agents_path = project_report["path"] / "AGENTS.md"
-    entry_text = "".join(
-        f"- `project-standards:{standard}` applies to the detected project scope.\n"
-        for standard in missing_standard_list
-    )
-    if not agents_path.exists():
-        agents_path.write_text(
+        return sorted(
             (
-                f"# Repository Guidelines\n\n{TABLE_OF_CONTENTS_HEADING}\n\n"
-                f"- [Required Standards](#required-standards)\n\n{REQUIRED_HEADING}\n\n{entry_text}"
+                child.resolve()
+                for child in self._workspace_root.iterdir()
+                if child.is_dir() and ((child / ".git").is_dir() or (child / ".git").is_file())
             ),
-            encoding="utf-8",
+            key=lambda path: path.name,
         )
-        return
-    text = agents_path.read_text(encoding="utf-8")
-    heading_match = re.search(r"(?m)^## Required Standards\s*$", text)
-    if heading_match is None:
-        suffix = "" if text.endswith("\n") else "\n"
-        agents_path.write_text(f"{text}{suffix}\n{REQUIRED_HEADING}\n\n{entry_text}", encoding="utf-8")
-        return
-    section_start = heading_match.end()
-    next_heading_match = re.search(r"(?m)^## ", text[section_start:])
-    insert_index = len(text) if next_heading_match is None else section_start + next_heading_match.start()
-    prefix = text[:insert_index].rstrip()
-    suffix = text[insert_index:].lstrip()
-    agents_path.write_text(f"{prefix}\n{entry_text}\n{suffix}", encoding="utf-8")
 
+    def _project_report_get(self, project_path: Path) -> ProjectReport:
+        """Build exact mechanical metadata for one project.
 
-def _workspace_report_get(workspace_root: Path) -> WorkspaceReport:
-    """Build complete workspace validation state.
+        Args:
+            project_path: Canonical project worktree root.
 
-    Args:
-        workspace_root: Explicit workspace directory.
+        Returns:
+            Complete mechanical project report.
+        """
 
-    Returns:
-        Complete project reports and duplicated Git common directories.
-    """
-
-    available_standard_set = _available_standard_set_get()
-    project_report_list: list[ProjectReport] = []
-    for project_path in _project_path_list_get(workspace_root):
-        path_list = [
-            relative_path
-            for relative_path in _git_output_get(
-                project_path,
-                ["ls-files", "--cached", "--others", "--exclude-standard"],
-            ).splitlines()
-            if (project_path / relative_path).exists() or (project_path / relative_path).is_symlink()
-        ]
         agents_path = project_path / "AGENTS.md"
         declared_standard_list = required_standard_name_list_get(agents_path)
-        project_report_list.append(
-            ProjectReport(
-                declared_standard_list=declared_standard_list,
-                git_common_dir=Path(
-                    _git_output_get(project_path, ["rev-parse", "--path-format=absolute", "--git-common-dir"])
-                ).resolve(),
-                missing_metadata_list=_missing_metadata_list_get(agents_path),
-                path=project_path,
-                required_standard_list=_required_standard_list_get(project_path, path_list),
-                unavailable_standard_list=sorted(set(declared_standard_list) - available_standard_set),
+        baseline_missing_standard_list = sorted(set(BASELINE_REQUIRED_STANDARD_TUPLE) - set(declared_standard_list))
+        missing_root_instruction_list = _missing_root_instruction_list_get(agents_path)
+        task_root_issue_list = _task_root_issue_list_get(project_path)
+        unavailable_standard_list = sorted(set(declared_standard_list) - self._available_standard_set)
+        if (
+            baseline_missing_standard_list
+            or missing_root_instruction_list
+            or task_root_issue_list
+            or unavailable_standard_list
+        ):
+            mechanical_status = "finding"
+        else:
+            mechanical_status = "clean"
+        return ProjectReport(
+            baseline_missing_standard_list=baseline_missing_standard_list,
+            declared_standard_list=declared_standard_list,
+            git_common_dir=Path(
+                _git_output_get(project_path, ["rev-parse", "--path-format=absolute", "--git-common-dir"])
+            ).resolve(),
+            mechanical_status=mechanical_status,
+            missing_root_instruction_list=missing_root_instruction_list,
+            path=project_path,
+            task_root_issue_list=task_root_issue_list,
+            unavailable_standard_list=unavailable_standard_list,
+        )
+
+    def report_print(self, workspace_report: WorkspaceReport) -> None:
+        """Print deterministic JSON for one workspace report.
+
+        Args:
+            workspace_report: Complete mechanical workspace state.
+        """
+
+        print(
+            json.dumps(
+                {
+                    "duplicate_git_common_dir_list": workspace_report["duplicate_git_common_dir_list"],
+                    "mechanical_status": workspace_report["mechanical_status"],
+                    "project_list": [
+                        {
+                            "baseline_missing_standard_list": project_report["baseline_missing_standard_list"],
+                            "declared_standard_list": project_report["declared_standard_list"],
+                            "git_common_dir": str(project_report["git_common_dir"]),
+                            "mechanical_status": project_report["mechanical_status"],
+                            "missing_root_instruction_list": project_report["missing_root_instruction_list"],
+                            "path": str(project_report["path"]),
+                            "semantic_audit_required": True,
+                            "task_root_issue_list": project_report["task_root_issue_list"],
+                            "unavailable_standard_list": project_report["unavailable_standard_list"],
+                        }
+                        for project_report in workspace_report["project_report_list"]
+                    ],
+                    "semantic_audit_required": True,
+                    "workspace_root": str(self._workspace_root),
+                },
+                indent=2,
+                sort_keys=True,
             )
         )
-    common_dir_count_by_path_map: dict[Path, int] = {}
-    for project_report in project_report_list:
-        git_common_dir = project_report["git_common_dir"]
-        common_dir_count_by_path_map[git_common_dir] = common_dir_count_by_path_map.get(git_common_dir, 0) + 1
-    duplicate_common_dir_list = sorted(str(path) for path, count in common_dir_count_by_path_map.items() if count > 1)
-    return WorkspaceReport(
-        duplicate_git_common_dir_list=duplicate_common_dir_list,
-        project_report_list=project_report_list,
-    )
 
+    def workspace_report_get(self) -> WorkspaceReport:
+        """Build the complete workspace mechanical report.
 
-def _workspace_report_print(
-    workspace_root: Path,
-    workspace_report: WorkspaceReport,
-) -> None:
-    """Print deterministic workspace validation JSON.
+        Returns:
+            Project reports, duplicate worktrees, and aggregate status.
+        """
 
-    Args:
-        workspace_root: Explicit workspace directory.
-        workspace_report: Complete workspace validation state.
-    """
-
-    duplicate_common_dir_list = workspace_report["duplicate_git_common_dir_list"]
-    project_report_list = workspace_report["project_report_list"]
-    print(
-        json.dumps(
-            {
-                "duplicate_git_common_dir_list": duplicate_common_dir_list,
-                "is_valid": all(_is_project_report_valid(project_report) for project_report in project_report_list)
-                and not duplicate_common_dir_list,
-                "project_list": [_project_report_payload_get(project_report) for project_report in project_report_list],
-                "workspace_root": str(workspace_root),
-            },
-            indent=2,
-            sort_keys=True,
+        project_report_list = [self._project_report_get(project_path) for project_path in self._project_path_list_get()]
+        common_dir_count_by_path_map: dict[Path, int] = {}
+        for project_report in project_report_list:
+            git_common_dir = project_report["git_common_dir"]
+            common_dir_count_by_path_map[git_common_dir] = common_dir_count_by_path_map.get(git_common_dir, 0) + 1
+        duplicate_git_common_dir_list = sorted(
+            str(path) for path, count in common_dir_count_by_path_map.items() if count > 1
         )
-    )
-
-
-def main() -> int:
-    """Validate or update standard selections for one explicit workspace.
-
-    Returns:
-        Zero when every discovered project is valid, otherwise one.
-    """
-
-    args = _args_parse()
-    workspace_root = args.workspace_root.resolve()
-    workspace_report = _workspace_report_get(workspace_root)
-    if args.write:
-        if workspace_report["duplicate_git_common_dir_list"]:
-            raise RuntimeError("Refusing to edit multiple worktrees of one Git common directory")
-        for project_report in workspace_report["project_report_list"]:
-            _required_standard_write(project_report)
-        workspace_report = _workspace_report_get(workspace_root)
-    _workspace_report_print(workspace_root, workspace_report)
-    return int(
-        not all(_is_project_report_valid(project_report) for project_report in workspace_report["project_report_list"])
-        or bool(workspace_report["duplicate_git_common_dir_list"])
-    )
-
-
-class ProjectReport(TypedDict):
-    """Store one repository classification and validation result."""
-
-    declared_standard_list: list[str]
-    git_common_dir: Path
-    missing_metadata_list: list[str]
-    path: Path
-    required_standard_list: list[str]
-    unavailable_standard_list: list[str]
+        if duplicate_git_common_dir_list or any(
+            project_report["mechanical_status"] != "clean" for project_report in project_report_list
+        ):
+            mechanical_status = "finding"
+        else:
+            mechanical_status = "clean"
+        return WorkspaceReport(
+            duplicate_git_common_dir_list=duplicate_git_common_dir_list,
+            mechanical_status=mechanical_status,
+            project_report_list=project_report_list,
+        )
 
 
 class WorkspaceReport(TypedDict):
-    """Store complete workspace validation state."""
+    """Store complete workspace mechanical inventory state."""
 
     duplicate_git_common_dir_list: list[str]
+    mechanical_status: str
     project_report_list: list[ProjectReport]
 
 

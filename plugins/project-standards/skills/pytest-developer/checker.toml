@@ -1,9 +1,0 @@
-schema_version = 1
-owner = "project-standards:pytest-developer"
-
-[[check_list]]
-id = "pytest.test-import-and-support-artifact"
-script_path = "scripts/test_support_contract_check.py"
-scope_strategy = "full-on-change"
-path_include_glob_list = ["test/**", "conftest.py", "**/conftest.py", ".gitmodules"]
-trigger_path_include_glob_list = ["**/*"]

@@ -114,16 +114,16 @@ def test_distribution_installs_source_identical_checker_assets_and_runs_console(
     assert help_result.stderr == ""
 
     consumer_root = tmp_path / "consumer"
-    (consumer_root / "docs").mkdir(parents=True)
+    consumer_root.mkdir()
     (consumer_root / "AGENTS.md").write_text(
         (
             "# Repository Guidelines\n\n"
             "## Required Standards\n\n"
-            "- `project-standards:project-documentation-developer` applies to maintained documents.\n"
+            "- `project-standards:python-cli-developer` applies to executable scripts.\n"
         ),
         encoding="utf-8",
     )
-    (consumer_root / "docs" / "guide.md").write_text("# Guide\n", encoding="utf-8")
+    (consumer_root / "module.py").write_text('"""Describe the module."""\n', encoding="utf-8")
     git_result = _command_run(["git", "init", "-q", "-b", "main"], cwd=consumer_root)
     assert git_result.returncode == 0, git_result.stderr
     check_result = _command_run(
@@ -139,11 +139,12 @@ def test_distribution_installs_source_identical_checker_assets_and_runs_console(
     )
     assert check_result.returncode == 0, check_result.stderr
     assert json.loads(check_result.stdout) == {
-        "checker_count": 1,
-        "error_list": [],
-        "finding_list": [],
+        "mechanical_checker_count": 1,
+        "mechanical_error_list": [],
+        "mechanical_finding_list": [],
+        "mechanical_status": "clean",
         "scope": "all",
-        "status": "ok",
+        "semantic_audit_required": True,
     }
     assert check_result.stderr == ""
 

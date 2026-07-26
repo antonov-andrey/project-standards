@@ -129,3 +129,39 @@ def test_changed_scope_expands_changed_gitlink_and_direct_submodule_dirty_state(
         "provider/dirty.py",
         "provider/unchanged.py",
     ]
+
+
+def test_changed_scope_uses_current_submodule_paths_when_gitlink_commit_is_unavailable(tmp_path: Path) -> None:
+    """An unavailable gitlink base expands to every current Submodule path.
+
+    Args:
+        tmp_path: Pytest temporary directory.
+    """
+
+    project_root = tmp_path / "consumer"
+    submodule_root = project_root / "provider"
+    _git_init(submodule_root)
+    (submodule_root / "first.py").write_text("first\n", encoding="utf-8")
+    (submodule_root / "second.py").write_text("second\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], check=True, cwd=submodule_root)
+    _git_commit(submodule_root, "provider")
+
+    _git_init(project_root)
+    (project_root / ".gitmodules").write_text(
+        '[submodule "provider"]\n\tpath = provider\n\turl = https://example.invalid/provider.git\n',
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", ".gitmodules"], check=True, cwd=project_root)
+    unavailable_revision = "1" * 40
+    subprocess.run(
+        ["git", "update-index", "--add", "--cacheinfo", f"160000,{unavailable_revision},provider"],
+        check=True,
+        cwd=project_root,
+    )
+    _git_commit(project_root, "consumer")
+
+    assert project_relpath_list_get(project_root, scope="changed") == [
+        "provider",
+        "provider/first.py",
+        "provider/second.py",
+    ]

@@ -18,10 +18,11 @@
   - `test/integration/**` is for slower or environment-dependent tests and for tests that exercise real external boundaries.
   - `test/code/**` is the optional consumer-local code-contract branch for exact project or Product integration restrictions that have no reusable provider owner.
   - `test/code/**` is separate from the ordinary handoff suite.
-  - A mechanically enforceable subset of one reusable standard MUST be implemented as a checker under its provider skill and MUST NOT be copied into consumer `test/code/**`.
+  - An independently normative, closed, and completely decidable mechanical rule of one reusable standard MUST be implemented as a checker under its provider skill and MUST NOT be copied into consumer `test/code/**`.
+  - An approximate semantic proxy, heuristic signal, selected example list, or false-positive allowlist MUST NOT be implemented as a checker. Such requirements remain semantic even when a script could find some likely violations.
   - Reusable runtime behavior MUST be tested under the runtime owner, including one owning `Submodule`; a consumer `test/code/**` MUST NOT duplicate those behavior tests.
   - One consumer-local `test/code/**` check MUST name and exercise its exact local integration contract and MUST NOT become a hidden owner for reusable policy.
-  - General repository policy, semantic intent, and broad prohibitions MUST be stated in the owning non-test contract; executable checks implement only the mechanically checkable subset.
+  - General repository policy, semantic intent, and broad prohibitions MUST be stated in the owning non-test contract; executable checks implement only independently normative closed predicates that they decide completely.
   - Tests MUST NOT assert the presence, absence, exact wording, or ordered text fragments of instruction prose as a proxy for instruction synchronization; instruction-artifact tests MAY validate mechanical structure, syntax, references, parser behavior, executable checker behavior, and machine-facing contract identifiers consumed by executable validators, while semantic drift belongs to semantic audit workflows.
 - Owner-local placement:
   - root-repository `test` MUST NOT host owner-local tests of one `Skill`,
@@ -33,7 +34,7 @@
 - `pytest --ignore=test/code -q` is the ordinary repository handoff suite for code, tests, runtime behavior, and database behavior when no narrower owner defines another ordinary suite.
 - Targeted verification and executable standard checks do not replace the ordinary handoff suite.
 - `test/code/**` is not part of the ordinary handoff suite and runs only when the task changes that local contract or helper, the user explicitly requests it, or a narrower workflow gate requires it.
-- `project-standard-check --project-root <repository-root> --scope changed` is separate from pytest and runs when changed scope is governed by selected mechanically enforced standards.
+- `project-standard-check --project-root <repository-root> --scope changed` is separate from pytest and runs when changed scope is governed by selected mechanically enforced standards. Its clean result is mechanical evidence only and never a semantic verdict.
 - Provider checker tests verify checker success, finding, critical edge, scope, and diagnostic behavior in the provider repository; they do not scan a consumer repository as their own test fixture.
 
 ## Test Import And Support Artifact Contract
@@ -52,12 +53,12 @@
 - environment-dependent or slower root-repository tests MUST live under `test/integration/**`,
 - environment-dependent or slower `Submodule` tests MUST follow the owning `Submodule`'s local pytest layout and slower-test conventions.
 - changed behavior MUST add or update behavior tests when those tests are the direct evidence of correctness,
-- changed mechanically enforced provider policy MUST add or update the owning provider checker and its owner-local tests,
+- a changed provider rule that remains eligible for mechanical enforcement MUST add or update the owning provider checker and its owner-local tests,
 - changed exact consumer-local code-structure contracts MUST add or update the owning consumer `test/code/**` check when mechanical verification is appropriate.
 - Required changed-behavior coverage MUST include:
   - the success path,
   - the primary contract-defining failure path,
   - every critical edge case or branch introduced by the change.
 - When one repository test or code-contract checker fails, inspect the failing test implementation itself before changing production code, test expectations, or instructions.
-- That inspection MUST include the failing test body, owner-local test helpers, fixtures, and any adjacent docstring or comments that clarify checker scope, approximations, or allowed exceptions.
+- That inspection MUST include the failing test body, owner-local test helpers, fixtures, and any adjacent docstring or comments that clarify the exact checker scope.
 - Test code is the executable verification contract; comments and docstrings may clarify special cases, but they MUST NOT be treated as stronger than the implemented assertion logic.

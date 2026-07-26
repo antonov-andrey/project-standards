@@ -14,6 +14,7 @@
   - be thin wrappers that own only minimal root bootstrap and direct handoff into one script owner,
   - centralize launch orchestration in one shared root-entrypoint helper under the same `script/<workflow_name>/**` slice or under `lib/**` only when multiple entrypoints share that same launch orchestration,
   - use the canonical parser provider selected by the governed project.
+- When the governed project declares the standard `config_argparse` provider, `config_argparse` is its canonical parser provider and every Product root entrypoint MUST use the `config_argparse` parsing contract.
 
 ## Script CLI Ownership
 
@@ -36,6 +37,7 @@
 - Type parsing and numeric range validation that can happen at parse time MUST stay in the CLI parser.
 - Cross-field invariants or object-local normalization that remain after parse time MUST live on the `*Config` model or another canonical owner, not in root bootstrap glue.
 - Environment binding uses the canonical parser provider selected by the governed project.
+- When the governed project declares the standard `config_argparse` provider, environment binding MUST use `config_argparse`.
 - A secret is declared explicitly and remains environment-only. It is absent from argv, help values, errors, and ordinary logs.
 - Ordinary environment-backed values retain their effective deployment defaults in help.
 

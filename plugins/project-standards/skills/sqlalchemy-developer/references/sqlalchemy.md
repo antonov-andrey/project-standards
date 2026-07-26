@@ -205,6 +205,7 @@
 
 - Applicability: these rules apply to `_test` DB seeding flows that copy project data for debugging or verification.
 
+- Git-tracked test fixture or seed artifacts are the only stable source for automatic `_test` data population before tests.
 - `_test` DB seeding from production MUST copy only the minimal required rows by default.
 - Full-table `_test` seeding is forbidden unless explicitly requested.
 - `_test` DB seeding MUST use `SQLAlchemy Session Rules`.

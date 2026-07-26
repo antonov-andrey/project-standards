@@ -7,26 +7,26 @@
 - Read repository metadata and tracked paths from Git. Do not hardcode repository names, personal home paths, or a current workspace inventory.
 - Treat secondary worktrees as repositories for checking, but do not edit two worktrees of the same Git common directory in one run.
 
-## Classification
+## Mechanical Inventory
 
-- Always select `project-foundation` and `project-instruction-developer`.
-- Select other capabilities from actual tracked entities, technologies, boundaries, artifact families, and workflows.
-- Select `kubernetes-developer` for real Kubernetes resource manifests, Helm chart or template structure, Kustomize configuration, or executable Kubernetes-client use. Documentation prose and string fixtures are not Kubernetes integration evidence.
-- Select `zitadel-developer` for actual ZITADEL deployment or configuration structure, a dedicated ZITADEL client boundary, or executable OIDC configuration explicitly bound to ZITADEL. Generic OIDC dependencies, documentation, fixtures, identifiers, path values, proxy names, and persisted foreign identity fields are not ZITADEL integration evidence by themselves.
-- A missing applicable capability is a validation failure unless the project records an explicit user-authorized exception.
-- Do not infer application modernization from classification. Existing unmodeled Python remains `Legacy` until an explicit migration changes its owner.
+- Mechanically verify root `AGENTS.md` presence, the closed baseline selection of `project-foundation` and `project-instruction-developer`, availability of every declared provider, the exact task-root ignore contract, absence of tracked `.spec` artifacts, and duplicate Git common-directory worktrees.
+- Table-of-contents structure, instruction meaning, applicability wording, and semantic completeness are outside the script and MUST be audited semantically.
+- Report these results only as mechanical inventory.
+- Do not inspect imports, filenames, dependencies, manifests, prose tokens, or selected framework examples to infer applicable standards.
+- Do not produce a mechanically inferred `required_standard_list`, `missing_standard_list`, or whole-project validity verdict.
+
+## Semantic Classification
+
+- Select capabilities from a complete semantic inspection of actual tracked entities, technologies, boundaries, artifact families, workflows, instructions, and stable design.
+- Inspect every available capability family for applicability; do not limit discovery to capabilities suggested by the mechanical inventory or previously observed project patterns.
+- A missing applicable capability is a finding unless the project records an explicit user-authorized exception.
+- Existing unmodeled Python remains `Legacy` until an explicit migration changes its owner.
 - Do not select a capability only for symmetry.
-
-## Mutation
-
-- Read-only check is the default safe operation.
-- Write mode changes only `Required Standards`, preserving every other project-local instruction.
-- Create no generated copy of provider prose and no separate project-standard manifest.
-- Do not modify an existing instruction artifact marked or known as a protected migration without its approved source-to-target ledger.
-- Fail before writing if a required provider skill is unavailable.
+- Do not modify a protected instruction artifact without its approved source-to-target ledger.
+- After any fix, restart the complete semantic classification from repository and provider discovery.
 
 ## Verification
 
-- Report repository path, Git common directory, detected capabilities, declared capabilities, missing capabilities, unavailable providers, and duplicate common-directory worktrees.
-- Re-run check after write mode.
-- Semantic audit remains required; classifier output is mechanical evidence only.
+- Report repository path, Git common directory, declared capabilities, baseline omissions, unavailable providers, missing root instructions, task-root findings, and duplicate common-directory worktrees.
+- Output `mechanical_status` and `semantic_audit_required=true`; never output `is_valid` for whole-project conformance.
+- Run the mechanical inventory and complete semantic audit in every standardization acceptance. Neither phase replaces the other.
