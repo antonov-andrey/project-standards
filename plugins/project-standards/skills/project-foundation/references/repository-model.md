@@ -44,3 +44,9 @@
 - If an owner-local `tool` utility already exists for one action, that utility MUST be used instead of an ad-hoc command sequence.
 - Root-repository `tool` MUST NOT host owner-local `tool` utilities of one `Skill`; those utilities MUST stay under the owning entity's local `tool`.
 - `tool` MUST NOT import `Python script`.
+
+## Executable Automation Contract
+
+- Every non-ignored project-local path whose name ends in `.sh` is forbidden.
+- Standalone non-ignored project-local executable automation MUST NOT be implemented in a shell language. When one standalone script is required, it MUST be a `Python script` governed by `project-standards:python-cli-developer`.
+- Executable shell-language code MAY exist only as boundary-local command text inside one externally owned configuration or runtime command field. It MUST stay limited to the minimum adaptation required by that boundary and MUST NOT own reusable project automation or project policy.

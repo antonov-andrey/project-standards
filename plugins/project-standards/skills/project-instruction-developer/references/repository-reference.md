@@ -1,6 +1,6 @@
 # Repository Reference Rules
 
-- Repository-local references MUST use plain root-relative paths such as `plugins/project-standards/skills/python-cli-developer/test/test_repository_shell_script_check.py`, `design/backend.md`, or `docs/script_catalog.md`.
+- Repository-local references MUST use plain root-relative paths such as `plugins/project-standards/skills/project-foundation/test/test_repository_shell_script_check.py`, `design/backend.md`, or `docs/script_catalog.md`.
 - Root-relative means relative to the owning repository boundary.
 - Repository-local Markdown links are forbidden, except same-file heading-anchor links inside an explicit table of contents.
 - Bare local relative references such as `./<local>.md` or `../<other>.md` are forbidden.

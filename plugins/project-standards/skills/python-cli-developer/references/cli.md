@@ -2,8 +2,6 @@
 
 ## Repository Script Artifact And Root Entrypoint Shape
 
-- Utility scripts and other intentionally executable scripts MUST be `Python script`s.
-- Repository `.sh` scripts are forbidden.
 - Every intentionally executable script MUST implement `--help`.
 - Every intentionally executable script MUST launch its `--help` path by direct script command from its owning repository boundary without `PYTHONPATH` or other inline environment-variable assignments.
 - The `--help` path of every intentionally executable script MUST use the script's standard startup, import, parser construction, and argument-parsing path.

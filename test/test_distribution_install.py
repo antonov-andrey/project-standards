@@ -119,7 +119,7 @@ def test_distribution_installs_source_identical_checker_assets_and_runs_console(
         (
             "# Repository Guidelines\n\n"
             "## Required Standards\n\n"
-            "- `project-standards:python-cli-developer` applies to executable scripts.\n"
+            "- `project-standards:project-foundation` applies to all project work.\n"
         ),
         encoding="utf-8",
     )
@@ -147,6 +147,37 @@ def test_distribution_installs_source_identical_checker_assets_and_runs_console(
         "semantic_audit_required": True,
     }
     assert check_result.stderr == ""
+
+    (consumer_root / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    for scope in ["all", "changed"]:
+        finding_result = _command_run(
+            [
+                str(environment_root / "bin" / "project-standard-check"),
+                "--project-root",
+                str(consumer_root),
+                "--scope",
+                scope,
+            ],
+            cwd=tmp_path,
+            environment=process_environment,
+        )
+        assert finding_result.returncode == 1, finding_result.stderr
+        assert json.loads(finding_result.stdout) == {
+            "mechanical_checker_count": 1,
+            "mechanical_error_list": [],
+            "mechanical_finding_list": [
+                {
+                    "id": "project-foundation.repository-shell-script",
+                    "message": "project-local .sh paths are forbidden; use one intentionally executable Python script",
+                    "owner": "project-standards:project-foundation",
+                    "path": "run.sh",
+                }
+            ],
+            "mechanical_status": "finding",
+            "scope": scope,
+            "semantic_audit_required": True,
+        }
+        assert finding_result.stderr == ""
 
     installed_asset_result = _command_run(
         [

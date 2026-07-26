@@ -48,10 +48,10 @@ project-standard-check --project-root <repository-root> --scope <scope>
 
 ```toml
 schema_version = 1
-owner = "project-standards:python-cli-developer"
+owner = "project-standards:project-foundation"
 
 [[check_list]]
-id = "python-cli.repository-shell-script"
+id = "project-foundation.repository-shell-script"
 script_path = "scripts/repository_shell_script_check.py"
 scope_strategy = "path-local"
 path_include_glob_list = ["*.sh", "**/*.sh"]

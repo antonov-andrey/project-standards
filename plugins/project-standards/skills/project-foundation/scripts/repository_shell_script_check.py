@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reject repository shell-script artifacts in the declared path scope."""
+"""Reject project-local shell-script artifacts in the declared path scope."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from project_standards.project_standard_model import ProjectStandardCheckerFindi
 
 
 def _finding_list_get(request: ProjectStandardRequest) -> list[ProjectStandardCheckerFinding]:
-    """Return one finding for every current repository shell script.
+    """Return one finding for every current project-local shell script.
 
     Args:
         request: Validated checker process request.
@@ -24,7 +24,7 @@ def _finding_list_get(request: ProjectStandardRequest) -> list[ProjectStandardCh
 
     return [
         ProjectStandardCheckerFinding(
-            message="repository .sh scripts are forbidden; use one intentionally executable Python script",
+            message="project-local .sh paths are forbidden; use one intentionally executable Python script",
             path=relative_path,
         )
         for relative_path in request["path_list"]
@@ -33,7 +33,7 @@ def _finding_list_get(request: ProjectStandardRequest) -> list[ProjectStandardCh
 
 
 def main() -> int:
-    """Run the exact repository shell-script checker.
+    """Run the exact project-local shell-script checker.
 
     Returns:
         Canonical checker protocol exit code.

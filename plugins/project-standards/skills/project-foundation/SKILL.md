@@ -7,7 +7,7 @@ description: Use when working in any governed project or when repository ownersh
 
 Read every reference needed by the current scope before acting:
 
-- `references/repository-model.md` for repository entities and ownership;
+- `references/repository-model.md` for repository entities, ownership, and project-local executable automation;
 - `references/writing-and-reporting.md` for prose and problem reports;
 - `references/execution.md` for mutation safety, evidence, and verification;
 - `references/temporal-data.md` whenever time values or timestamps are involved;

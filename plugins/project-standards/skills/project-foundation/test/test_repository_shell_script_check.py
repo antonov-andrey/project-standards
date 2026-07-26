@@ -1,4 +1,4 @@
-"""Behavior tests for the exact repository shell-script checker."""
+"""Behavior tests for the exact project-local shell-script checker."""
 
 from __future__ import annotations
 
