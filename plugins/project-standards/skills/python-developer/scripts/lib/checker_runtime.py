@@ -8,102 +8,57 @@ from pathlib import Path
 import subprocess
 import sys
 
+ROOT = Path.cwd().resolve()
 TMP_ROOT = Path("/tmp").resolve()
 
 
-def _git_output_line_list_get(repo_root: Path, argument_list: list[str]) -> list[str]:
-    """Run one read-only Git query and return its non-empty output lines.
+def function_arg_list_collect(node: ast.AST) -> list[str]:
+    """Collect explicit argument names excluding receivers.
 
     Args:
-        repo_root: Repository root used by Git.
-        argument_list: Arguments passed after ``git``.
+        node: Function or method AST node.
 
     Returns:
-        Ordered non-empty output lines.
-
-    Raises:
-        ValueError: Git rejects the query.
+        Ordered explicit argument names excluding ``self`` and ``cls``.
     """
 
-    result = subprocess.run(
-        ["git", "-C", str(repo_root), *argument_list],
-        capture_output=True,
-        check=False,
-        text=True,
-    )
-    if result.returncode != 0:
-        message = result.stderr.strip() or result.stdout.strip() or "Git query failed"
-        raise ValueError(message)
-    return [line for line in result.stdout.splitlines() if line]
+    name_list: list[str] = []
+    for arg in getattr(node.args, "posonlyargs", []):
+        name_list.append(arg.arg)
+    for arg in node.args.args:
+        name_list.append(arg.arg)
+    if node.args.vararg is not None:
+        name_list.append(node.args.vararg.arg)
+    for arg in node.args.kwonlyargs:
+        name_list.append(arg.arg)
+    if node.args.kwarg is not None:
+        name_list.append(node.args.kwarg.arg)
+    return [name for name in name_list if name not in {"self", "cls"}]
 
 
-def _repo_root_path_get() -> Path:
-    """Resolve the target repository from the checker's current directory.
-
-    Returns:
-        Absolute target repository root.
-
-    Raises:
-        ValueError: The current directory is not inside a Git worktree.
-    """
-
-    line_list = _git_output_line_list_get(Path.cwd(), ["rev-parse", "--show-toplevel"])
-    if len(line_list) != 1:
-        raise ValueError("Unable to resolve one target Git worktree")
-    return Path(line_list[0]).resolve()
-
-
-ROOT = _repo_root_path_get()
-
-
-def _is_product_python_path(path: Path) -> bool:
-    """Return whether a repository path belongs to product Python scope.
+def import_root_set(tree: ast.Module) -> set[str]:
+    """Collect imported top-level roots from one module.
 
     Args:
-        path: Repository-relative candidate path.
+        tree: Parsed module AST.
 
     Returns:
-        ``True`` for Python files outside support, generated, and task roots.
+        Unique imported root names.
     """
 
-    if path.suffix != ".py":
-        return False
-    excluded_root_set = {
-        ".agents",
-        ".codex",
-        ".spec",
-        "build",
-        "dist",
-        "docs",
-        "test",
-        "tests",
-        "tmp",
-        "tool",
-    }
-    return bool(path.parts) and path.parts[0] not in excluded_root_set and "__pycache__" not in path.parts
-
-
-def _product_python_relpath_list_get() -> list[Path]:
-    """Collect current tracked and untracked product Python files.
-
-    Returns:
-        Sorted repository-relative Python paths.
-    """
-
-    line_list = _git_output_line_list_get(
-        ROOT,
-        ["ls-files", "--cached", "--others", "--exclude-standard", "--", "*.py"],
-    )
-    return sorted(
-        {
-            path
-            for line in line_list
-            if (path := Path(line)).is_relative_to(Path("."))
-            and _is_product_python_path(path)
-            and (ROOT / path).is_file()
-        },
-        key=lambda path: path.as_posix(),
-    )
+    root_set: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                root = alias.name.split(".", 1)[0]
+                if root and root != "__future__":
+                    root_set.add(root)
+            continue
+        if isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            root = node.module.split(".", 1)[0]
+            if root and root != "__future__":
+                root_set.add(root)
+    return root_set
 
 
 def _changed_python_relpath_list_get() -> list[Path]:
@@ -160,24 +115,80 @@ def _explicit_repo_path_list_get(raw_input_list: list[str]) -> list[Path]:
     return sorted(resolved_path_set, key=lambda path: path.as_posix())
 
 
-def _temp_sample_path_list_get(target_list: list[Path]) -> list[Path]:
-    """Expand explicit Python sample targets under ``/tmp``.
+def _git_output_line_list_get(repo_root: Path, argument_list: list[str]) -> list[str]:
+    """Run one read-only Git query and return its non-empty output lines.
 
     Args:
-        target_list: Existing resolved targets below the temporary root.
+        repo_root: Repository root used by Git.
+        argument_list: Arguments passed after ``git``.
 
     Returns:
-        Sorted unique absolute Python sample paths.
+        Ordered non-empty output lines.
+
+    Raises:
+        ValueError: Git rejects the query.
     """
 
-    resolved_path_set: set[Path] = set()
-    for target in target_list:
-        if target.is_file():
-            if target.suffix == ".py":
-                resolved_path_set.add(target)
-            continue
-        resolved_path_set.update(path.resolve() for path in target.rglob("*.py") if path.is_file())
-    return sorted(resolved_path_set, key=lambda path: path.as_posix())
+    result = subprocess.run(
+        ["git", "-C", str(repo_root), *argument_list],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if result.returncode != 0:
+        message = result.stderr.strip() or result.stdout.strip() or "Git query failed"
+        raise ValueError(message)
+    return [line for line in result.stdout.splitlines() if line]
+
+
+def _is_product_python_path(path: Path) -> bool:
+    """Return whether a repository path belongs to product Python scope.
+
+    Args:
+        path: Repository-relative candidate path.
+
+    Returns:
+        ``True`` for Python files outside support, generated, and task roots.
+    """
+
+    if path.suffix != ".py":
+        return False
+    excluded_root_set = {
+        ".agents",
+        ".codex",
+        ".spec",
+        "build",
+        "dist",
+        "docs",
+        "test",
+        "tests",
+        "tmp",
+        "tool",
+    }
+    return bool(path.parts) and path.parts[0] not in excluded_root_set and "__pycache__" not in path.parts
+
+
+def _product_python_relpath_list_get() -> list[Path]:
+    """Collect current tracked and untracked product Python files.
+
+    Returns:
+        Sorted repository-relative Python paths.
+    """
+
+    line_list = _git_output_line_list_get(
+        ROOT,
+        ["ls-files", "--cached", "--others", "--exclude-standard", "--", "*.py"],
+    )
+    return sorted(
+        {
+            path
+            for line in line_list
+            if (path := Path(line)).is_relative_to(Path("."))
+            and _is_product_python_path(path)
+            and (ROOT / path).is_file()
+        },
+        key=lambda path: path.as_posix(),
+    )
 
 
 def _scope_path_list_explicit_get(raw_input_list: list[str]) -> list[Path]:
@@ -209,53 +220,24 @@ def _scope_path_list_explicit_get(raw_input_list: list[str]) -> list[Path]:
     return sorted(set(resolved_path_list), key=lambda path: path.as_posix())
 
 
-def function_arg_list_collect(node: ast.AST) -> list[str]:
-    """Collect explicit argument names excluding receivers.
+def _temp_sample_path_list_get(target_list: list[Path]) -> list[Path]:
+    """Expand explicit Python sample targets under ``/tmp``.
 
     Args:
-        node: Function or method AST node.
+        target_list: Existing resolved targets below the temporary root.
 
     Returns:
-        Ordered explicit argument names excluding ``self`` and ``cls``.
+        Sorted unique absolute Python sample paths.
     """
 
-    name_list: list[str] = []
-    for arg in getattr(node.args, "posonlyargs", []):
-        name_list.append(arg.arg)
-    for arg in node.args.args:
-        name_list.append(arg.arg)
-    if node.args.vararg is not None:
-        name_list.append(node.args.vararg.arg)
-    for arg in node.args.kwonlyargs:
-        name_list.append(arg.arg)
-    if node.args.kwarg is not None:
-        name_list.append(node.args.kwarg.arg)
-    return [name for name in name_list if name not in {"self", "cls"}]
-
-
-def import_root_set(tree: ast.Module) -> set[str]:
-    """Collect imported top-level roots from one module.
-
-    Args:
-        tree: Parsed module AST.
-
-    Returns:
-        Unique imported root names.
-    """
-
-    root_set: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                root = alias.name.split(".", 1)[0]
-                if root and root != "__future__":
-                    root_set.add(root)
+    resolved_path_set: set[Path] = set()
+    for target in target_list:
+        if target.is_file():
+            if target.suffix == ".py":
+                resolved_path_set.add(target)
             continue
-        if isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
-            root = node.module.split(".", 1)[0]
-            if root and root != "__future__":
-                root_set.add(root)
-    return root_set
+        resolved_path_set.update(path.resolve() for path in target.rglob("*.py") if path.is_file())
+    return sorted(resolved_path_set, key=lambda path: path.as_posix())
 
 
 def main_project_scope_path_list_resolve(path_list: list[str], scope: str) -> list[Path]:

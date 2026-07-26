@@ -9,4 +9,8 @@
 - Capabilities control presentation and MUST NOT replace backend authorization.
 - Personal presentation preferences remain scoped to the authenticated identity. Changing only `effective_zitadel_user_id` during Product delegation MUST NOT change them.
 - Missing route access preserves the requested URL and shell and presents a concrete access error. Other route failures preserve the shell and unaffected content through a recoverable concrete error boundary instead of the framework default or a blank page.
-- User-visible changes are verified through the complete affected workflow in a current real browser surface after tests and build.
+- User-visible changes are verified through the complete affected workflow in a current real browser surface serving the current built and deployed assets after required UI tests and build.
+- Real-browser verification MUST cover the changed action, every affected state transition, the recovery or reset path, and every user-visible success and failure outcome changed by the task.
+- A dev server, local build files, source inspection, direct asset requests, route stubs, unit or `jsdom` tests, static screenshots, backend-only checks, and a browser tab that still holds stale JavaScript MUST NOT replace required current-assets browser verification.
+- Visual debugging and visual fixes MUST compare the broken-before element, an analogous existing element that represents the intended standard, and the fixed-after element through screenshots.
+- When browser, build, cache, session, data, environment, or service state prevents trustworthy verification, remediate that environment and rerun the complete real-browser workflow before handoff.

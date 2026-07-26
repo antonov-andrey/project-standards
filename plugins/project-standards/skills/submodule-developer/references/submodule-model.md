@@ -14,3 +14,10 @@
 - Applicability: these rules apply to `Submodule code` implemented in Python.
 - `Submodule code` implemented in Python MUST NOT hardcode project-specific DB identifiers, path identifiers, or project identifiers.
 - The portability delta for a `Submodule`-owned `Python script` is that it MUST launch from the repository root by direct relative path under the `Submodule` root, and it MUST also launch from the `Submodule` root by the same direct script path, with an optional `./` prefix allowed there too.
+
+## Verification Ownership Contract
+
+- Reusable runtime behavior of one `Submodule` MUST be tested under that `Submodule`'s local `test` root and remain runnable both standalone and through a consumer's explicit shared pytest plugin.
+- A `Submodule` whose stable host contract has a mechanically enforceable subset MAY expose one root `project-standard-check.toml` manifest and owner-local checker implementation under its `tool/**`; that manifest and checker follow root `DESIGN.md`, section `Манифест И Протокол Процесса`.
+- One submodule host-conformance checker receives the consumer project root through the shared checker protocol, validates only the mechanically enforceable subset of the submodule's own `DESIGN.md` host contract, and remains read-only.
+- Consumer repositories MUST NOT copy one submodule-owned runtime behavior test or host-conformance checker into their own `test/code/**`.

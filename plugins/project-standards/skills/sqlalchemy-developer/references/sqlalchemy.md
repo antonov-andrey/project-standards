@@ -103,6 +103,29 @@
 - Column order in ORM model definitions MUST remain alphabetical.
 - `None` is used only when absence is a real separate value. Canonical empty text uses `''`.
 
+### Reusable Project ORM Field And Index Contract
+
+- A governed project MAY define one reusable standard field family through public factories named
+  `model_<field_name>_column_get` under its shared `lib/model_sqlalchemy/**` owner.
+- When that family exists:
+  - every root `model_sqlalchemy/**` row that declares `<field_name>` MUST use the matching
+    `model_<field_name>_column_get` factory;
+  - root row models MUST inherit the project shared ORM base under `lib/model_sqlalchemy/**`;
+  - standard table-argument generation belongs to that shared base and MUST NOT be called manually by individual row
+    models;
+  - a row-local custom `Index(...)` MUST NOT contain only fields from the standard field family;
+  - one mutable row with `t_create`, `t_update`, and `is_deleted` MUST receive its synchronized creation timestamps
+    from the shared row construction flow instead of enabling an independent `t_create` default factory.
+- When the standard family contains `zitadel_user_id`, shared index generation MUST provide
+  `ix_<table_name>_zitadel_user_id` for a row without `is_deleted`, or
+  `ix_<table_name>_zitadel_user_id_is_deleted` for a row with `is_deleted`; the latter replaces the redundant
+  owner-only index.
+- When the standard family contains `zitadel_user_id`, `name`, and `is_deleted`, enabled standard name uniqueness
+  MUST use one non-partial unique index `ux_<table_name>_zitadel_user_id_name` over
+  `(zitadel_user_id, name)`, including soft-deleted rows.
+- Product API managed-field declarations, when present, MUST be a strict subset of the standard field family and
+  MUST NOT classify `name` or `description` as framework-managed fields.
+
 ## SQLAlchemy Session Rules
 
 - Applicability: these rules apply whenever runtime flows or `_test` flows open project SQLAlchemy sessions.

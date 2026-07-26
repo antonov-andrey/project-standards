@@ -1,0 +1,142 @@
+schema_version = 1
+owner = "project-standards:python-developer"
+
+[[check_list]]
+id = "python.docstring"
+script_path = "scripts/check/python_docstring_contract_check.py"
+scope_strategy = "full-on-change"
+path_include_glob_list = ["**/*.py", "*.py", ".gitmodules"]
+trigger_path_include_glob_list = ["**/*"]
+
+[[check_list]]
+id = "python.black-format"
+script_path = "scripts/check/python_black_format_check.py"
+scope_strategy = "full-on-change"
+path_include_glob_list = ["**/*.py", "*.py", ".gitmodules"]
+trigger_path_include_glob_list = ["**/*"]
+
+[[check_list]]
+id = "python.multiline-string"
+script_path = "scripts/check/python_multiline_string_contract_check.py"
+scope_strategy = "full-on-change"
+path_include_glob_list = ["**/*.py", "*.py", ".gitmodules"]
+trigger_path_include_glob_list = ["**/*"]
+
+[[check_list]]
+id = "python.naming-and-carrier"
+script_path = "scripts/check/python_naming_contract_check.py"
+scope_strategy = "full-on-change"
+path_include_glob_list = ["**/*.py", "*.py", ".gitmodules"]
+trigger_path_include_glob_list = ["**/*"]
+
+[[check_list]]
+id = "python.signature-union"
+script_path = "scripts/check/python_signature_union_contract_check.py"
+scope_strategy = "full-on-change"
+path_include_glob_list = ["**/*.py", "*.py", ".gitmodules"]
+trigger_path_include_glob_list = ["**/*"]
+
+[[check_list]]
+id = "python.tuple-carrier"
+script_path = "scripts/check/python_tuple_carrier_contract_check.py"
+scope_strategy = "full-on-change"
+path_include_glob_list = ["**/*.py", "*.py", ".gitmodules"]
+trigger_path_include_glob_list = ["**/*"]
+
+[[check_list]]
+id = "python.plural-token"
+script_path = "scripts/check/python_plural_token_contract_check.py"
+scope_strategy = "full-on-change"
+path_include_glob_list = ["**/*.py", "*.py", ".gitmodules"]
+trigger_path_include_glob_list = ["**/*"]
+
+[[check_list]]
+id = "python.signature-truthfulness"
+script_path = "scripts/check/python_signature_truthfulness_contract_check.py"
+scope_strategy = "full-on-change"
+path_include_glob_list = ["**/*.py", "*.py", ".gitmodules"]
+trigger_path_include_glob_list = ["**/*"]
+
+[[check_list]]
+id = "python.class-necessity"
+script_path = "scripts/check/python_class_necessity_contract_check.py"
+scope_strategy = "full-on-change"
+path_include_glob_list = ["**/*.py", "*.py", ".gitmodules"]
+trigger_path_include_glob_list = ["**/*"]
+
+[[check_list]]
+id = "python.method-binding"
+script_path = "scripts/check/python_method_binding_contract_check.py"
+scope_strategy = "full-on-change"
+path_include_glob_list = ["**/*.py", "*.py", ".gitmodules"]
+trigger_path_include_glob_list = ["**/*"]
+
+[[check_list]]
+id = "python.proxy-wrapper"
+script_path = "scripts/check/python_proxy_wrapper_contract_check.py"
+scope_strategy = "full-on-change"
+path_include_glob_list = ["**/*.py", "*.py", ".gitmodules"]
+trigger_path_include_glob_list = ["**/*"]
+
+[[check_list]]
+id = "python.file-layout"
+script_path = "scripts/check/python_file_layout_contract_check.py"
+scope_strategy = "full-on-change"
+path_include_glob_list = ["**/*.py", "*.py", ".gitmodules"]
+trigger_path_include_glob_list = ["**/*"]
+
+[[check_list]]
+id = "python.import-contract"
+script_path = "scripts/check/python_import_contract_check.py"
+scope_strategy = "full-on-change"
+path_include_glob_list = ["**/*.py", "*.py", ".gitmodules"]
+trigger_path_include_glob_list = ["**/*"]
+
+[[check_list]]
+id = "python.package-constructor"
+script_path = "scripts/check/python_package_constructor_contract_check.py"
+scope_strategy = "full-on-change"
+path_include_glob_list = ["**/*.py", "*.py", ".gitmodules"]
+trigger_path_include_glob_list = ["**/*"]
+
+[[check_list]]
+id = "python.package-export"
+script_path = "scripts/check/python_package_export_contract_check.py"
+scope_strategy = "full-on-change"
+path_include_glob_list = ["**/*.py", "*.py", ".gitmodules"]
+trigger_path_include_glob_list = ["**/*"]
+
+[[check_list]]
+id = "python.visibility"
+script_path = "scripts/check/python_visibility_contract_check.py"
+scope_strategy = "full-on-change"
+path_include_glob_list = ["**/*.py", "*.py", ".gitmodules"]
+trigger_path_include_glob_list = ["**/*"]
+
+[[check_list]]
+id = "python.use-scope-ownership"
+script_path = "scripts/check/python_use_scope_ownership_contract_check.py"
+scope_strategy = "full-on-change"
+path_include_glob_list = ["**/*.py", "*.py", ".gitmodules"]
+trigger_path_include_glob_list = ["**/*"]
+
+[[check_list]]
+id = "python.dead-code"
+script_path = "scripts/check/python_dead_code_contract_check.py"
+scope_strategy = "full-on-change"
+path_include_glob_list = ["**/*.py", "*.py", ".gitmodules"]
+trigger_path_include_glob_list = ["**/*"]
+
+[[check_list]]
+id = "python.method-visibility"
+script_path = "scripts/check/python_method_visibility_contract_check.py"
+scope_strategy = "full-on-change"
+path_include_glob_list = ["**/*.py", "*.py", ".gitmodules"]
+trigger_path_include_glob_list = ["**/*"]
+
+[[check_list]]
+id = "python.validated-object"
+script_path = "scripts/check/python_validated_object_contract_check.py"
+scope_strategy = "full-on-change"
+path_include_glob_list = ["**/*.py", "*.py", ".gitmodules"]
+trigger_path_include_glob_list = ["**/*"]

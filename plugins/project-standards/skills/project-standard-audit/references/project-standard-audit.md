@@ -10,4 +10,5 @@
 - Confirm the exact root-level `/.spec/` ignore rule exists, no file under `.spec/` is tracked, and no task pair is classified as stale or deleted because its task completed or was abandoned.
 - Confirm no compatibility document, duplicate harness default, or hidden secondary checkout remains active.
 - For protected instruction migrations, validate the complete approved source-to-target ledger in addition to the final semantic model.
+- Run the selected provider and submodule conformance checkers for the full project scope and treat every finding or checker execution error as audit evidence.
 - Mechanical check success does not replace semantic review.

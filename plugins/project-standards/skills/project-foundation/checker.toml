@@ -1,0 +1,16 @@
+schema_version = 1
+owner = "project-standards:project-foundation"
+
+[[check_list]]
+id = "foundation.unambiguous-instruction-ownership-term"
+script_path = "scripts/instruction_language_check.py"
+scope_strategy = "full-on-change"
+path_include_glob_list = ["AGENTS*.md", "**/AGENTS*.md", ".codex/**", "plugins/**"]
+trigger_path_include_glob_list = ["**/*"]
+
+[[check_list]]
+id = "foundation.main-project-import-boundary"
+script_path = "scripts/main_project_import_boundary_check.py"
+scope_strategy = "full-on-change"
+path_include_glob_list = ["**/*.py", "*.py", ".gitmodules"]
+trigger_path_include_glob_list = ["**/*"]

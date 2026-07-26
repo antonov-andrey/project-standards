@@ -1,0 +1,16 @@
+schema_version = 1
+owner = "project-standards:python-cli-developer"
+
+[[check_list]]
+id = "python-cli.script-artifact-and-direct-help"
+script_path = "scripts/python_script_contract_check.py"
+scope_strategy = "full-on-change"
+path_include_glob_list = ["*.py", "*.sh", "**/*.py", "**/*.sh", "**/SKILL.md", ".gitmodules"]
+trigger_path_include_glob_list = ["**/*"]
+
+[[check_list]]
+id = "python-cli.documented-script-command"
+script_path = "scripts/script_command_documentation_check.py"
+scope_strategy = "full-on-change"
+path_include_glob_list = ["AGENTS*.md", "**/AGENTS*.md", ".codex/**", "plugins/**"]
+trigger_path_include_glob_list = ["**/*"]

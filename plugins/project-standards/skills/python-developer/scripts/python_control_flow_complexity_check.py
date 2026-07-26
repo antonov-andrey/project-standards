@@ -6,9 +6,9 @@ from __future__ import annotations
 
 import argparse
 import ast
-from dataclasses import dataclass
 from pathlib import Path
 import sys
+from typing import TypedDict
 
 from lib.checker_runtime import main_project_scope_path_list_resolve, python_module_parse, scope_args_add
 
@@ -54,7 +54,7 @@ def _control_flow_finding_list_build(path: Path, *, max_branches: int, max_nesti
         Collected findings for the module.
     """
 
-    findings: list[Finding] = []
+    finding_list: list[Finding] = []
     tree = python_module_parse(path)
 
     def visit_body(body_list: list[ast.stmt], prefix: str = "") -> None:
@@ -72,13 +72,13 @@ def _control_flow_finding_list_build(path: Path, *, max_branches: int, max_nesti
                     visitor.visit(statement)
                 qualname = f"{prefix}{node.name}" if prefix else node.name
                 if visitor._branch_count > max_branches or visitor._max_nesting > max_nesting:
-                    findings.append(
+                    finding_list.append(
                         Finding(
                             path=path,
                             lineno=node.lineno,
                             qualname=qualname,
-                            branches=visitor._branch_count,
-                            nesting=visitor._max_nesting,
+                            branch_count=visitor._branch_count,
+                            nesting_depth=visitor._max_nesting,
                         )
                     )
                 continue
@@ -86,7 +86,7 @@ def _control_flow_finding_list_build(path: Path, *, max_branches: int, max_nesti
                 visit_body(node.body, prefix=f"{node.name}.")
 
     visit_body(tree.body)
-    return findings
+    return finding_list
 
 
 def main() -> int:
@@ -98,20 +98,21 @@ def main() -> int:
 
     args = args_parse()
     scope = main_project_scope_path_list_resolve(args.paths, args.scope)
-    findings: list[Finding] = []
+    finding_list: list[Finding] = []
     for path in scope:
-        findings.extend(
+        finding_list.extend(
             _control_flow_finding_list_build(path, max_branches=args.max_branches, max_nesting=args.max_nesting)
         )
 
-    if not findings:
+    if not finding_list:
         print("Python control-flow complexity check passed.")
         return 0
 
-    for finding in findings:
+    for finding in finding_list:
         print(
-            f"{finding.path}:{finding.lineno}: {finding.qualname}: control-flow complexity exceeds limits "
-            f"(branches={finding.branches}, nesting={finding.nesting})."
+            f"{finding['path']}:{finding['lineno']}: {finding['qualname']}: "
+            "control-flow complexity exceeds limits "
+            f"(branches={finding['branch_count']}, nesting={finding['nesting_depth']})."
         )
     print("FAIL: Python control-flow complexity check failed.")
     return 1
@@ -243,13 +244,12 @@ class ControlFlowVisitor(ast.NodeVisitor):
         """
 
 
-@dataclass(frozen=True)
-class Finding:
+class Finding(TypedDict):
     """Represent one control-flow finding."""
 
-    branches: int
+    branch_count: int
     lineno: int
-    nesting: int
+    nesting_depth: int
     path: Path
     qualname: str
 

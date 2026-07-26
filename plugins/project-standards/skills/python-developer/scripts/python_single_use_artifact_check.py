@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import argparse
 import ast
-from dataclasses import dataclass
 from pathlib import Path
 import sys
+from typing import TypedDict
 
 from lib.checker_runtime import TMP_ROOT, main_project_scope_path_list_resolve, scope_args_add
 from lib.python_proxy_analysis import (
@@ -42,17 +42,17 @@ def args_parse() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _candidate_map_build(scope_path_list: list[Path]) -> dict[CandidateKey, Candidate]:
-    """Collect call_wrap/profile candidate_map from the selected scope.
+def _candidate_by_identity_map_build(scope_path_list: list[Path]) -> dict[str, Candidate]:
+    """Collect call_wrap/profile candidates from the selected scope.
 
     Args:
         scope_path_list: Candidate-definition scope.
 
     Returns:
-        Mapping `CandidateKey -> candidate`.
+        Candidate rows keyed by stable module and symbol identity.
     """
 
-    candidate_map: dict[CandidateKey, Candidate] = {}
+    candidate_by_identity_map: dict[str, Candidate] = {}
     for path in scope_path_list:
         source = path.read_text(encoding="utf-8")
         tree = ast.parse(source, filename=str(path))
@@ -61,7 +61,9 @@ def _candidate_map_build(scope_path_list: list[Path]) -> dict[CandidateKey, Cand
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 candidate = _function_candidate_build(path=path, module_name=module_name, node=node)
                 if candidate is not None:
-                    candidate_map[candidate.key_get()] = candidate
+                    candidate_by_identity_map[
+                        _candidate_identity_get(candidate["module_name"], candidate["symbol_name"])
+                    ] = candidate
                 continue
             if not isinstance(node, ast.ClassDef):
                 continue
@@ -75,8 +77,24 @@ def _candidate_map_build(scope_path_list: list[Path]) -> dict[CandidateKey, Cand
                 lineno=node.lineno,
                 reason="single-use thin subclass/profile call_wrap is forbidden",
             )
-            candidate_map[candidate.key_get()] = candidate
-    return candidate_map
+            candidate_by_identity_map[_candidate_identity_get(candidate["module_name"], candidate["symbol_name"])] = (
+                candidate
+            )
+    return candidate_by_identity_map
+
+
+def _candidate_identity_get(module_name: str, symbol_name: str) -> str:
+    """Return one collision-free candidate symbol identity.
+
+    Args:
+        module_name: Importable defining module name.
+        symbol_name: Top-level candidate symbol name.
+
+    Returns:
+        Stable module and symbol identity.
+    """
+
+    return f"{module_name}\0{symbol_name}"
 
 
 def _function_candidate_build(
@@ -117,7 +135,7 @@ def _function_candidate_build(
         )
 
     forwarding_result = forwarding_call_analysis_build(call, param_list=param_list)
-    if forwarding_result.is_valid and forwarding_result.has_literal and is_probable_constructor_target(call):
+    if forwarding_result["is_valid"] and forwarding_result["has_literal"] and is_probable_constructor_target(call):
         return Candidate(
             module_name=module_name,
             symbol_name=node.name,
@@ -193,39 +211,41 @@ def _path_package_name_get(path: Path) -> str:
     return module_name.rsplit(".", 1)[0]
 
 
-def _usage_count_map_compute(
-    candidate_map: dict[CandidateKey, Candidate], *, source_scope_path_list: list[Path]
-) -> dict[CandidateKey, int]:
-    """Count call-site usages for the selected candidate_map across repo product scope.
+def _usage_count_by_candidate_identity_map_compute(
+    candidate_by_identity_map: dict[str, Candidate],
+    *,
+    source_scope_path_list: list[Path],
+) -> dict[str, int]:
+    """Count call-site uses for selected candidates across repository Product scope.
 
     Args:
-        candidate_map: Candidate mapping keyed by `(module_name, symbol_name)`.
+        candidate_by_identity_map: Candidates keyed by stable module and symbol identity.
         source_scope_path_list: Explicit resolved checker scope.
 
     Returns:
         Mapping from candidate key to call-site usage count.
     """
 
-    counts = {key: 0 for key in candidate_map}
-    if not candidate_map:
-        return counts
+    usage_count_by_candidate_identity_map = {candidate_identity: 0 for candidate_identity in candidate_by_identity_map}
+    if not candidate_by_identity_map:
+        return usage_count_by_candidate_identity_map
 
-    candidate_key_set = set(candidate_map)
+    candidate_identity_set = set(candidate_by_identity_map)
     for path in _usage_search_scope_path_list_build(source_scope_path_list):
         source = path.read_text(encoding="utf-8")
         tree = ast.parse(source, filename=str(path))
         current_module_name = _path_module_name_get(path)
         current_package = _path_package_name_get(path)
 
-        direct_alias_map: dict[str, set[CandidateKey]] = {}
-        module_alias_map: dict[str, str] = {}
+        candidate_identity_set_by_direct_alias_map: dict[str, set[str]] = {}
+        module_name_by_alias_map: dict[str, str] = {}
 
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
-                    _imported_module_get = alias.name
-                    bound_name = alias.asname or _imported_module_get.split(".")[-1]
-                    module_alias_map[bound_name] = _imported_module_get
+                    imported_module_name = alias.name
+                    bound_name = alias.asname or imported_module_name.split(".")[-1]
+                    module_name_by_alias_map[bound_name] = imported_module_name
             elif isinstance(node, ast.ImportFrom):
                 imported_module = _imported_module_get(
                     current_package=current_package,
@@ -237,23 +257,25 @@ def _usage_count_map_compute(
                 for alias in node.names:
                     if alias.name == "*":
                         continue
-                    candidate_key = CandidateKey(module_name=imported_module, symbol_name=alias.name)
-                    if candidate_key not in candidate_key_set:
+                    candidate_identity = _candidate_identity_get(imported_module, alias.name)
+                    if candidate_identity not in candidate_identity_set:
                         continue
                     bound_name = alias.asname or alias.name
-                    direct_alias_map.setdefault(bound_name, set()).add(candidate_key)
+                    candidate_identity_set_by_direct_alias_map.setdefault(bound_name, set()).add(candidate_identity)
 
         visitor = UsageVisitor(
             current_module_name=current_module_name,
-            direct_alias_map=direct_alias_map,
-            module_alias_map=module_alias_map,
-            candidate_key_set=candidate_key_set,
+            candidate_identity_set=candidate_identity_set,
+            candidate_identity_set_by_direct_alias_map=candidate_identity_set_by_direct_alias_map,
+            module_name_by_alias_map=module_name_by_alias_map,
         )
         visitor.visit(tree)
-        for candidate_key, count in visitor._counts.items():
-            counts[candidate_key] = counts.get(candidate_key, 0) + count
+        for candidate_identity, count in visitor._usage_count_by_candidate_identity_map.items():
+            usage_count_by_candidate_identity_map[candidate_identity] = (
+                usage_count_by_candidate_identity_map.get(candidate_identity, 0) + count
+            )
 
-    return counts
+    return usage_count_by_candidate_identity_map
 
 
 def _usage_search_scope_path_list_build(source_scope_path_list: list[Path]) -> list[Path]:
@@ -292,27 +314,31 @@ def main() -> int:
         print("INFO: single-use artifact check skipped (no Python files in scope).")
         return 0
 
-    candidate_map = _candidate_map_build(scope)
-    if not candidate_map:
+    candidate_by_identity_map = _candidate_by_identity_map_build(scope)
+    if not candidate_by_identity_map:
         print("Python single-use artifact check passed.")
         return 0
 
-    counts = _usage_count_map_compute(candidate_map, source_scope_path_list=scope)
-    violations: list[str] = []
-    for candidate_key, candidate in sorted(
-        candidate_map.items(), key=lambda item: (item[1].path.as_posix(), item[1].lineno)
+    usage_count_by_candidate_identity_map = _usage_count_by_candidate_identity_map_compute(
+        candidate_by_identity_map,
+        source_scope_path_list=scope,
+    )
+    violation_list: list[str] = []
+    for candidate_identity, candidate in sorted(
+        candidate_by_identity_map.items(),
+        key=lambda item: (item[1]["path"].as_posix(), item[1]["lineno"]),
     ):
-        use_count = counts.get(candidate_key, 0)
+        use_count = usage_count_by_candidate_identity_map.get(candidate_identity, 0)
         if use_count > 1:
             continue
-        violations.append(
-            f"{candidate.path}:{candidate.lineno} {candidate.symbol_kind} {candidate.symbol_name}: "
-            f"{candidate.reason} (repo call-site count={use_count})"
+        violation_list.append(
+            f"{candidate['path']}:{candidate['lineno']} {candidate['symbol_kind']} "
+            f"{candidate['symbol_name']}: {candidate['reason']} (repo call-site count={use_count})"
         )
 
-    if violations:
+    if violation_list:
         print("Python single-use call_wrap/profile violations:")
-        for violation in violations:
+        for violation in violation_list:
             print(violation)
         return 1
 
@@ -320,8 +346,7 @@ def main() -> int:
     return 0
 
 
-@dataclass(frozen=True)
-class Candidate:
+class Candidate(TypedDict):
     """Represent one single-use call_wrap/profile candidate."""
 
     lineno: int
@@ -331,23 +356,6 @@ class Candidate:
     symbol_kind: str
     symbol_name: str
 
-    def key_get(self) -> "CandidateKey":
-        """Return the identity key used by usage counting.
-
-        Returns:
-            Stable candidate identity key.
-        """
-
-        return CandidateKey(module_name=self.module_name, symbol_name=self.symbol_name)
-
-
-@dataclass(frozen=True)
-class CandidateKey:
-    """Represent one candidate symbol identity key."""
-
-    module_name: str
-    symbol_name: str
-
 
 class UsageVisitor(ast.NodeVisitor):
     """Collect call-site usages for candidate symbols in one module."""
@@ -355,25 +363,25 @@ class UsageVisitor(ast.NodeVisitor):
     def __init__(
         self,
         *,
+        candidate_identity_set: set[str],
+        candidate_identity_set_by_direct_alias_map: dict[str, set[str]],
         current_module_name: str,
-        direct_alias_map: dict[str, set[CandidateKey]],
-        module_alias_map: dict[str, str],
-        candidate_key_set: set[CandidateKey],
+        module_name_by_alias_map: dict[str, str],
     ) -> None:
         """Initialize usage visitor state.
 
         Args:
+            candidate_identity_set: Candidate identities tracked for usage counting.
+            candidate_identity_set_by_direct_alias_map: Candidate identities keyed by direct import alias.
             current_module_name: Module name currently being traversed.
-            direct_alias_map: Imported direct symbol aliases visible in the module.
-            module_alias_map: Imported module aliases visible in the module.
-            candidate_key_set: Candidate symbol keys tracked for usage counting.
+            module_name_by_alias_map: Imported module names keyed by visible alias.
         """
 
         self._current_module_name = current_module_name
-        self._direct_aliases = direct_alias_map
-        self._module_aliases = module_alias_map
-        self._candidate_keys = candidate_key_set
-        self._counts: dict[CandidateKey, int] = {}
+        self._candidate_identity_set_by_direct_alias_map = candidate_identity_set_by_direct_alias_map
+        self._module_name_by_alias_map = module_name_by_alias_map
+        self._candidate_identity_set = candidate_identity_set
+        self._usage_count_by_candidate_identity_map: dict[str, int] = {}
 
     def visit_Call(self, node: ast.Call) -> None:
         """Collect call_wrap/profile call-site usage from one call node.
@@ -384,20 +392,29 @@ class UsageVisitor(ast.NodeVisitor):
 
         func = node.func
         if isinstance(func, ast.Name):
-            direct_candidates = self._direct_aliases.get(func.id, set())
-            if direct_candidates:
-                for candidate_key in direct_candidates:
-                    self._counts[candidate_key] = self._counts.get(candidate_key, 0) + 1
+            direct_candidate_identity_set = self._candidate_identity_set_by_direct_alias_map.get(
+                func.id,
+                set(),
+            )
+            if direct_candidate_identity_set:
+                for candidate_identity in direct_candidate_identity_set:
+                    self._usage_count_by_candidate_identity_map[candidate_identity] = (
+                        self._usage_count_by_candidate_identity_map.get(candidate_identity, 0) + 1
+                    )
             else:
-                candidate_key = CandidateKey(module_name=self._current_module_name, symbol_name=func.id)
-                if candidate_key in self._candidate_keys:
-                    self._counts[candidate_key] = self._counts.get(candidate_key, 0) + 1
+                candidate_identity = _candidate_identity_get(self._current_module_name, func.id)
+                if candidate_identity in self._candidate_identity_set:
+                    self._usage_count_by_candidate_identity_map[candidate_identity] = (
+                        self._usage_count_by_candidate_identity_map.get(candidate_identity, 0) + 1
+                    )
         elif isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
-            module_name = self._module_aliases.get(func.value.id)
+            module_name = self._module_name_by_alias_map.get(func.value.id)
             if module_name is not None:
-                candidate_key = CandidateKey(module_name=module_name, symbol_name=func.attr)
-                if candidate_key in self._candidate_keys:
-                    self._counts[candidate_key] = self._counts.get(candidate_key, 0) + 1
+                candidate_identity = _candidate_identity_get(module_name, func.attr)
+                if candidate_identity in self._candidate_identity_set:
+                    self._usage_count_by_candidate_identity_map[candidate_identity] = (
+                        self._usage_count_by_candidate_identity_map.get(candidate_identity, 0) + 1
+                    )
         self.generic_visit(node)
 
 

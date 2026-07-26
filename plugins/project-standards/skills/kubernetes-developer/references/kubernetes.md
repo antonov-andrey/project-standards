@@ -21,3 +21,5 @@
 ## Verification
 
 - Render and validate manifests before mutation; verify the affected live behavior after deployment changes.
+- When Kubernetes deployment is the required verification surface for changed application assets, deploy the exact current assets before live verification.
+- If the normal apply or reconciliation path fails to rebuild or redeploy assets whose inputs changed, fix its change-detection or reconciliation logic instead of using one force-only bypass as the accepted verification path.

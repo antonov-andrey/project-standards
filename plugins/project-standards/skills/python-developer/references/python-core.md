@@ -20,6 +20,7 @@
 - Every file in non-`Legacy` `Python code` MUST comply with the canonical Black formatting and docstring standard.
 - When a change set touches a file in non-`Legacy` `Python code`, that same change set MUST bring that file into compliance with the canonical Black formatting and docstring standard.
 - Files in non-`Legacy` `Python code` MUST be formatted with Black using the canonical repository settings `--target-version py314` and `--line-length 120`.
+- Before any partial or full Python test run used for handoff, changed non-`Legacy` Python scope MUST be formatted with `black --target-version py314 --line-length 120 <relevant-python-scope>`.
 - Files in non-`Legacy` `Python code` MUST have:
   - a module docstring,
   - a docstring on every `class`,

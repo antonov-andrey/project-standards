@@ -13,9 +13,9 @@ from __future__ import annotations
 
 import argparse
 import ast
-from dataclasses import dataclass
 from pathlib import Path
 import sys
+from typing import TypedDict
 
 from lib.checker_runtime import main_project_scope_path_list_resolve, scope_args_add
 from lib.python_proxy_analysis import (
@@ -88,7 +88,7 @@ def _free_function_violation_get(
         )
 
     forwarding_analysis = forwarding_call_analysis_build(call, param_list=param_list)
-    if forwarding_analysis.is_valid and forwarding_analysis.has_literal and is_probable_constructor_target(call):
+    if forwarding_analysis["is_valid"] and forwarding_analysis["has_literal"] and is_probable_constructor_target(call):
         target = ast.unparse(call.func) if hasattr(ast, "unparse") else "<constructor>"
         return Finding(
             path=path,
@@ -116,34 +116,42 @@ def _is_pure_free_function_method_proxy(call: ast.Call, *, param_list: list[str]
     if not isinstance(func.value, ast.Name) or func.value.id not in param_list:
         return False
 
-    forwarded: set[str] = {func.value.id}
+    forwarded_parameter_name_set: set[str] = {func.value.id}
     for arg in call.args:
         if isinstance(arg, ast.Starred):
             value = arg.value
-            if not isinstance(value, ast.Name) or value.id not in param_list or value.id in forwarded:
+            if (
+                not isinstance(value, ast.Name)
+                or value.id not in param_list
+                or value.id in forwarded_parameter_name_set
+            ):
                 return False
-            forwarded.add(value.id)
+            forwarded_parameter_name_set.add(value.id)
             continue
-        if not isinstance(arg, ast.Name) or arg.id not in param_list or arg.id in forwarded:
+        if not isinstance(arg, ast.Name) or arg.id not in param_list or arg.id in forwarded_parameter_name_set:
             return False
-        forwarded.add(arg.id)
+        forwarded_parameter_name_set.add(arg.id)
 
     for keyword in call.keywords:
         if keyword.arg is None:
             value = keyword.value
-            if not isinstance(value, ast.Name) or value.id not in param_list or value.id in forwarded:
+            if (
+                not isinstance(value, ast.Name)
+                or value.id not in param_list
+                or value.id in forwarded_parameter_name_set
+            ):
                 return False
-            forwarded.add(value.id)
+            forwarded_parameter_name_set.add(value.id)
             continue
         if (
             not isinstance(keyword.value, ast.Name)
             or keyword.value.id not in param_list
-            or keyword.value.id in forwarded
+            or keyword.value.id in forwarded_parameter_name_set
         ):
             return False
-        forwarded.add(keyword.value.id)
+        forwarded_parameter_name_set.add(keyword.value.id)
 
-    return forwarded == set(param_list)
+    return forwarded_parameter_name_set == set(param_list)
 
 
 def _is_self_or_super_delegate(call: ast.Call) -> bool:
@@ -178,7 +186,7 @@ def _method_proxy_violation_list_build(path: Path, node: ast.ClassDef) -> list[F
         Method-level findings.
     """
 
-    findings: list[Finding] = []
+    finding_list: list[Finding] = []
     for method in node.body:
         if not isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
@@ -192,7 +200,7 @@ def _method_proxy_violation_list_build(path: Path, node: ast.ClassDef) -> list[F
         if not is_parameter_forwarding_pure(call, param_list=param_list):
             continue
         target = ast.unparse(call.func) if hasattr(ast, "unparse") else "<delegate>"
-        findings.append(
+        finding_list.append(
             Finding(
                 path=path,
                 lineno=method.lineno,
@@ -200,7 +208,7 @@ def _method_proxy_violation_list_build(path: Path, node: ast.ClassDef) -> list[F
                 reason=f"pure pass-through proxy to {target} is forbidden",
             )
         )
-    return findings
+    return finding_list
 
 
 def _proxy_violation_list_build(path: Path) -> list[str]:
@@ -216,16 +224,16 @@ def _proxy_violation_list_build(path: Path) -> list[str]:
     source = path.read_text(encoding="utf-8")
     tree = ast.parse(source, filename=str(path))
 
-    findings: list[Finding] = []
-    top_level_defs = _top_level_symbol_def_list_compute(tree)
-    top_level_violation_symbols: set[TopLevelSymbolKey] = set()
+    finding_list: list[Finding] = []
+    top_level_symbol_def_list = _top_level_symbol_def_list_compute(tree)
+    top_level_violation_symbol_identity_set: set[str] = set()
 
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             finding = _free_function_violation_get(path, node)
             if finding is not None:
-                findings.append(finding)
-                top_level_violation_symbols.add(TopLevelSymbolKey(kind="function", name=node.name))
+                finding_list.append(finding)
+                top_level_violation_symbol_identity_set.add(f"function\0{node.name}")
             continue
 
         if not isinstance(node, ast.ClassDef):
@@ -233,15 +241,15 @@ def _proxy_violation_list_build(path: Path) -> list[str]:
 
         finding = thin_subclass_violation_get(path, node)
         if finding is not None:
-            findings.append(finding)
-            top_level_violation_symbols.add(TopLevelSymbolKey(kind="class", name=node.name))
+            finding_list.append(finding)
+            top_level_violation_symbol_identity_set.add(f"class\0{node.name}")
 
-        findings.extend(_method_proxy_violation_list_build(path, node))
+        finding_list.extend(_method_proxy_violation_list_build(path, node))
 
-    top_level_symbols = {symbol.identity_key_get() for symbol in top_level_defs}
-    if top_level_symbols and top_level_symbols == top_level_violation_symbols:
-        module_line = min(symbol.lineno for symbol in top_level_defs)
-        findings.append(
+    top_level_symbol_identity_set = {f"{symbol['kind']}\0{symbol['name']}" for symbol in top_level_symbol_def_list}
+    if top_level_symbol_identity_set and top_level_symbol_identity_set == top_level_violation_symbol_identity_set:
+        module_line = min(symbol["lineno"] for symbol in top_level_symbol_def_list)
+        finding_list.append(
             Finding(
                 path=path,
                 lineno=module_line,
@@ -250,7 +258,7 @@ def _proxy_violation_list_build(path: Path) -> list[str]:
             )
         )
 
-    return [f"{item.path}:{item.lineno} {item.symbol}: {item.reason}" for item in findings]
+    return [f"{item['path']}:{item['lineno']} {item['symbol']}: {item['reason']}" for item in finding_list]
 
 
 def _top_level_symbol_def_list_compute(tree: ast.Module) -> list[TopLevelSymbolDef]:
@@ -263,13 +271,13 @@ def _top_level_symbol_def_list_compute(tree: ast.Module) -> list[TopLevelSymbolD
         Top-level symbol rows.
     """
 
-    symbols: list[TopLevelSymbolDef] = []
+    symbol_list: list[TopLevelSymbolDef] = []
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            symbols.append(TopLevelSymbolDef(kind="function", name=node.name, lineno=node.lineno))
+            symbol_list.append(TopLevelSymbolDef(kind="function", name=node.name, lineno=node.lineno))
         elif isinstance(node, ast.ClassDef):
-            symbols.append(TopLevelSymbolDef(kind="class", name=node.name, lineno=node.lineno))
-    return symbols
+            symbol_list.append(TopLevelSymbolDef(kind="class", name=node.name, lineno=node.lineno))
+    return symbol_list
 
 
 def main() -> int:
@@ -289,13 +297,13 @@ def main() -> int:
         print("INFO: proxy-method check skipped (no Python files in scope).")
         return 0
 
-    violations: list[str] = []
+    violation_list: list[str] = []
     for path in scope:
-        violations.extend(_proxy_violation_list_build(path))
+        violation_list.extend(_proxy_violation_list_build(path))
 
-    if violations:
+    if violation_list:
         print("Python proxy-method violations:")
-        for violation in violations:
+        for violation in violation_list:
             print(violation)
         return 1
 
@@ -303,29 +311,11 @@ def main() -> int:
     return 0
 
 
-@dataclass(frozen=True)
-class TopLevelSymbolDef:
+class TopLevelSymbolDef(TypedDict):
     """Represent one top-level function or class definition."""
 
     kind: str
     lineno: int
-    name: str
-
-    def identity_key_get(self) -> TopLevelSymbolKey:
-        """Return the identity key used by module-level proxy detection.
-
-        Returns:
-            Stable top-level symbol identity key.
-        """
-
-        return TopLevelSymbolKey(kind=self.kind, name=self.name)
-
-
-@dataclass(frozen=True)
-class TopLevelSymbolKey:
-    """Represent one top-level symbol identity key."""
-
-    kind: str
     name: str
 
 

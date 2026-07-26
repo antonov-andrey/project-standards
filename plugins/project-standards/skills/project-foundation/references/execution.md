@@ -30,3 +30,15 @@
   - Instruction-evasion and shortcut behavior are forbidden even when they appear to satisfy the process formally.
   - Do not narrow required scope silently or omit expensive or long work instead of reporting a blocker.
   - Do not rename, retype, move, or split artifacts to evade stricter rules, skill triggers, or file-type-specific standards.
+
+## Verification And Handoff Contract
+
+- Verification MUST cover the changed artifact type and the changed observable behavior.
+- Changed executable behavior MUST use automated behavior tests when those tests are direct evidence of correctness.
+- Project-code changes MUST run targeted checks that directly exercise the changed behavior in addition to the applicable ordinary handoff suite.
+- Instruction-only and documentation-only changes that do not change executable behavior MUST use explicit semantic reread of the changed text and its directly referenced canonical owners plus applicable non-test artifact validation; they do not require a Product test suite only because prose changed.
+- Structural owner moves MUST verify the new owner, removal of the old owner, and every directly dependent instruction, documentation, test, tool, dependency, and consumer boundary.
+- A mechanical standard check is evidence only for the mechanically encoded subset of its owning contract and MUST NOT replace semantic review.
+- After fixing one failed verification target, rerun that same target before running broader partial or full verification.
+- Do not hand off while required verification is failing. Fix repository-local fallout in the same task; report a blocker only when remediation depends on unavailable external state, lies outside the authorized repository boundary, or requires an unapproved semantic contract change.
+- One command may be reported as `Pass` only when it exited successfully. Report warnings and other material diagnostics explicitly.

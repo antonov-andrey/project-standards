@@ -6,9 +6,9 @@ from __future__ import annotations
 
 import argparse
 import ast
-from dataclasses import dataclass
 from pathlib import Path
 import sys
+from typing import TypedDict
 
 from lib.checker_runtime import main_project_scope_path_list_resolve, python_module_parse, scope_args_add
 
@@ -67,7 +67,7 @@ def _finding_list_build(path: Path) -> list[Finding]:
         Collected findings for the module.
     """
 
-    findings: list[Finding] = []
+    finding_list: list[Finding] = []
     tree = python_module_parse(path)
 
     def function_inspect(
@@ -86,7 +86,7 @@ def _finding_list_build(path: Path) -> list[Finding]:
             return
         for call in (candidate for candidate in ast.walk(node) if isinstance(candidate, ast.Call)):
             if _is_service_locator_call(call):
-                findings.append(
+                finding_list.append(
                     Finding(
                         path=path,
                         lineno=call.lineno,
@@ -96,7 +96,7 @@ def _finding_list_build(path: Path) -> list[Finding]:
                 )
                 return
             if _is_dependency_constructor_call(call):
-                findings.append(
+                finding_list.append(
                     Finding(
                         path=path,
                         lineno=call.lineno,
@@ -114,7 +114,7 @@ def _finding_list_build(path: Path) -> list[Finding]:
             for child in node.body:
                 if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     function_inspect(child, qualname=f"{node.name}.{child.name}")
-    return findings
+    return finding_list
 
 
 def _is_allowed_factory(name: str) -> bool:
@@ -189,22 +189,21 @@ def main() -> int:
 
     args = args_parse()
     scope = main_project_scope_path_list_resolve(args.paths, args.scope)
-    findings: list[Finding] = []
+    finding_list: list[Finding] = []
     for path in scope:
-        findings.extend(_finding_list_build(path))
+        finding_list.extend(_finding_list_build(path))
 
-    if not findings:
+    if not finding_list:
         print("Python hidden-dependency construction check passed.")
         return 0
 
-    for finding in findings:
-        print(f"{finding.path}:{finding.lineno}: {finding.qualname}: {finding.reason}.")
+    for finding in finding_list:
+        print(f"{finding['path']}:{finding['lineno']}: {finding['qualname']}: {finding['reason']}.")
     print("FAIL: Python hidden-dependency construction check failed.")
     return 1
 
 
-@dataclass(frozen=True)
-class Finding:
+class Finding(TypedDict):
     """Represent one hidden-dependency finding."""
 
     lineno: int

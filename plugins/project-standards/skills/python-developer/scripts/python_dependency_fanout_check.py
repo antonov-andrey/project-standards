@@ -6,9 +6,9 @@ from __future__ import annotations
 
 import argparse
 import ast
-from dataclasses import dataclass
 from pathlib import Path
 import sys
+from typing import TypedDict
 
 from lib.checker_runtime import (
     function_arg_list_collect,
@@ -90,16 +90,19 @@ def _module_finding_list_build(path: Path, *, max_import_roots: int, max_depende
         Collected findings for the module.
     """
 
-    findings: list[Finding] = []
+    finding_list: list[Finding] = []
     tree = python_module_parse(path)
-    roots = import_root_set(tree)
-    if len(roots) > max_import_roots:
-        findings.append(
+    imported_root_set = import_root_set(tree)
+    if len(imported_root_set) > max_import_roots:
+        finding_list.append(
             Finding(
                 path=path,
                 lineno=1,
                 owner=path.as_posix(),
-                reason=f"module dependency fan-out exceeds limit ({len(roots)} imported roots > {max_import_roots})",
+                reason=(
+                    "module dependency fan-out exceeds limit "
+                    f"({len(imported_root_set)} imported roots > {max_import_roots})"
+                ),
             )
         )
 
@@ -116,11 +119,13 @@ def _module_finding_list_build(path: Path, *, max_import_roots: int, max_depende
         )
         if init_node is None:
             continue
-        dependency_args = [name for name in function_arg_list_collect(init_node) if _is_dependency_like(name)]
-        stored_fields = _stored_dependency_field_set(init_node)
-        dependency_count = max(len(dependency_args), len(stored_fields))
+        dependency_argument_name_list = [
+            name for name in function_arg_list_collect(init_node) if _is_dependency_like(name)
+        ]
+        stored_dependency_field_set = _stored_dependency_field_set(init_node)
+        dependency_count = max(len(dependency_argument_name_list), len(stored_dependency_field_set))
         if dependency_count > max_dependencies:
-            findings.append(
+            finding_list.append(
                 Finding(
                     path=path,
                     lineno=init_node.lineno,
@@ -131,7 +136,7 @@ def _module_finding_list_build(path: Path, *, max_import_roots: int, max_depende
                     ),
                 )
             )
-    return findings
+    return finding_list
 
 
 def _stored_dependency_field_set(init_node: ast.AST) -> set[str]:
@@ -144,8 +149,8 @@ def _stored_dependency_field_set(init_node: ast.AST) -> set[str]:
         Stored dependency-like field names.
     """
 
-    params = set(function_arg_list_collect(init_node))
-    stored: set[str] = set()
+    parameter_name_set = set(function_arg_list_collect(init_node))
+    stored_dependency_field_set: set[str] = set()
     for statement in init_node.body:
         if not isinstance(statement, ast.Assign):
             continue
@@ -155,11 +160,11 @@ def _stored_dependency_field_set(init_node: ast.AST) -> set[str]:
         value = statement.value
         if not isinstance(target, ast.Attribute) or not isinstance(target.value, ast.Name) or target.value.id != "self":
             continue
-        if not isinstance(value, ast.Name) or value.id not in params:
+        if not isinstance(value, ast.Name) or value.id not in parameter_name_set:
             continue
         if _is_dependency_like(value.id):
-            stored.add(target.attr)
-    return stored
+            stored_dependency_field_set.add(target.attr)
+    return stored_dependency_field_set
 
 
 def main() -> int:
@@ -171,26 +176,25 @@ def main() -> int:
 
     args = args_parse()
     scope = main_project_scope_path_list_resolve(args.paths, args.scope)
-    findings: list[Finding] = []
+    finding_list: list[Finding] = []
     for path in scope:
-        findings.extend(
+        finding_list.extend(
             _module_finding_list_build(
                 path, max_import_roots=args.max_import_roots, max_dependencies=args.max_dependencies
             )
         )
 
-    if not findings:
+    if not finding_list:
         print("Python dependency fan-out check passed.")
         return 0
 
-    for finding in findings:
-        print(f"{finding.path}:{finding.lineno}: {finding.owner}: {finding.reason}.")
+    for finding in finding_list:
+        print(f"{finding['path']}:{finding['lineno']}: {finding['owner']}: {finding['reason']}.")
     print("FAIL: Python dependency fan-out check failed.")
     return 1
 
 
-@dataclass(frozen=True)
-class Finding:
+class Finding(TypedDict):
     """Represent one dependency fan-out finding."""
 
     lineno: int

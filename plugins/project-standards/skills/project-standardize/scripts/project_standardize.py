@@ -5,11 +5,16 @@ from __future__ import annotations
 
 import argparse
 import ast
-from dataclasses import dataclass
 import json
 from pathlib import Path
 import re
 import subprocess
+import sys
+from typing import TypedDict
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "lib"))
+
+from project_standards import required_standard_name_list_get
 
 ALWAYS_REQUIRED_STANDARD_TUPLE = ("project-foundation", "project-instruction-developer")
 NON_RUNTIME_PATH_PART_SET = {
@@ -32,46 +37,12 @@ STRUCTURED_CONFIG_SUFFIX_SET = {".json", ".yaml", ".yml"}
 TABLE_OF_CONTENTS_HEADING = "## Table Of Contents"
 
 
-@dataclass(frozen=True)
-class ProjectReport:
-    """Store one repository classification and validation result."""
-
-    declared_standard_list: list[str]
-    git_common_dir: Path
-    missing_metadata_list: list[str]
-    path: Path
-    required_standard_list: list[str]
-    unavailable_standard_list: list[str]
-
-    @property
-    def missing_standard_list(self) -> list[str]:
-        """Return applicable standards absent from project instructions."""
-
-        return sorted(set(self.required_standard_list) - set(self.declared_standard_list))
-
-    @property
-    def is_valid(self) -> bool:
-        """Return whether this project satisfies the machine-readable contract."""
-
-        return not self.missing_metadata_list and not self.missing_standard_list and not self.unavailable_standard_list
-
-    def payload_get(self) -> dict[str, object]:
-        """Return one JSON-compatible project report."""
-
-        return {
-            "declared_standard_list": self.declared_standard_list,
-            "git_common_dir": str(self.git_common_dir),
-            "is_valid": self.is_valid,
-            "missing_metadata_list": self.missing_metadata_list,
-            "missing_standard_list": self.missing_standard_list,
-            "path": str(self.path),
-            "required_standard_list": self.required_standard_list,
-            "unavailable_standard_list": self.unavailable_standard_list,
-        }
-
-
 def _args_parse() -> argparse.Namespace:
-    """Parse command-line arguments."""
+    """Parse command-line arguments.
+
+    Returns:
+        Parsed standardization arguments.
+    """
 
     parser = argparse.ArgumentParser(description=__doc__)
     mode_group = parser.add_mutually_exclusive_group()
@@ -86,68 +57,14 @@ def _args_parse() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _available_standard_set_get() -> frozenset[str]:
-    """Return capability skill names present in this provider installation."""
-
-    return frozenset(
-        path.name for path in STANDARD_SKILL_ROOT.iterdir() if path.is_dir() and (path / "SKILL.md").is_file()
-    )
-
-
-def _declared_standard_list_get(agents_path: Path) -> list[str]:
-    """Parse project-standards entries from one Required Standards section.
-
-    Args:
-        agents_path: Root project instruction path.
+def _available_standard_set_get() -> set[str]:
+    """Return capability skill names present in this provider installation.
 
     Returns:
-        Sorted unique provider skill names.
+        Available provider capability names.
     """
 
-    if not agents_path.is_file():
-        return []
-    text = agents_path.read_text(encoding="utf-8")
-    heading_match = re.search(r"(?m)^## Required Standards\s*$", text)
-    if heading_match is None:
-        return []
-    next_heading_match = re.search(r"(?m)^## ", text[heading_match.end() :])
-    section_end = len(text) if next_heading_match is None else heading_match.end() + next_heading_match.start()
-    section = text[heading_match.end() : section_end]
-    return sorted(set(re.findall(r"`project-standards:([a-z0-9-]+)`", section)))
-
-
-def _git_output_get(project_path: Path, argument_list: list[str]) -> str:
-    """Run one read-only Git command.
-
-    Args:
-        project_path: Git worktree root.
-        argument_list: Arguments passed after ``git``.
-
-    Returns:
-        Stripped standard output.
-    """
-
-    return subprocess.run(
-        ["git", "-C", str(project_path), *argument_list],
-        capture_output=True,
-        check=True,
-        text=True,
-    ).stdout.strip()
-
-
-def _heading_anchor_get(heading: str) -> str:
-    """Return the canonical table-of-contents anchor for one heading.
-
-    Args:
-        heading: Literal Markdown heading text.
-
-    Returns:
-        Lowercase anchor with spaces converted to hyphens and punctuation removed.
-    """
-
-    return "".join(
-        "-" if character == " " else character.lower() if character.isalnum() else "" for character in heading
-    )
+    return {path.name for path in STANDARD_SKILL_ROOT.iterdir() if path.is_dir() and (path / "SKILL.md").is_file()}
 
 
 def _exist_kubernetes_integration(project_path: Path, path_list: list[str]) -> bool:
@@ -275,6 +192,57 @@ def _exist_zitadel_integration(project_path: Path, path_list: list[str]) -> bool
     return False
 
 
+def _git_output_get(project_path: Path, argument_list: list[str]) -> str:
+    """Run one read-only Git command.
+
+    Args:
+        project_path: Git worktree root.
+        argument_list: Arguments passed after ``git``.
+
+    Returns:
+        Stripped standard output.
+    """
+
+    return subprocess.run(
+        ["git", "-C", str(project_path), *argument_list],
+        capture_output=True,
+        check=True,
+        text=True,
+    ).stdout.strip()
+
+
+def _heading_anchor_get(heading: str) -> str:
+    """Return the canonical table-of-contents anchor for one heading.
+
+    Args:
+        heading: Literal Markdown heading text.
+
+    Returns:
+        Lowercase anchor with spaces converted to hyphens and punctuation removed.
+    """
+
+    return "".join(
+        "-" if character == " " else character.lower() if character.isalnum() else "" for character in heading
+    )
+
+
+def _is_project_report_valid(project_report: ProjectReport) -> bool:
+    """Return whether one project satisfies the machine-readable contract.
+
+    Args:
+        project_report: Project classification and validation state.
+
+    Returns:
+        Whether no metadata, selection, or availability problem remains.
+    """
+
+    return (
+        not project_report["missing_metadata_list"]
+        and not _project_report_missing_standard_list_get(project_report)
+        and not project_report["unavailable_standard_list"]
+    )
+
+
 def _is_runtime_path(relative_path: str) -> bool:
     """Return whether one path can represent an executable integration artifact.
 
@@ -286,6 +254,36 @@ def _is_runtime_path(relative_path: str) -> bool:
     """
 
     return not ({part.lower() for part in Path(relative_path).parts} & NON_RUNTIME_PATH_PART_SET)
+
+
+def _is_table_of_contents_valid(text: str) -> bool:
+    """Return whether one root instruction file has its exact canonical table of contents.
+
+    Args:
+        text: Complete root instruction text.
+
+    Returns:
+        Whether the table of contents is first and matches every later level-two and level-three heading.
+    """
+
+    root_heading_match = re.match(r"^# [^\n]+\n", text)
+    table_heading_match = re.search(rf"(?m)^{re.escape(TABLE_OF_CONTENTS_HEADING)}[ \t]*$", text)
+    if root_heading_match is None or table_heading_match is None:
+        return False
+    if text[root_heading_match.end() : table_heading_match.start()].strip():
+        return False
+    next_heading_match = re.search(r"(?m)^## (?!Table Of Contents[ \t]*$)", text[table_heading_match.end() :])
+    if next_heading_match is None:
+        return False
+    section_end = table_heading_match.end() + next_heading_match.start()
+    actual_entry_list = [line for line in text[table_heading_match.end() : section_end].splitlines() if line.strip()]
+    later_text = text[section_end:]
+    expected_entry_list = []
+    for heading_match in re.finditer(r"(?m)^(##|###) (.+?)[ \t]*$", later_text):
+        marker, heading = heading_match.groups()
+        indent = "" if marker == "##" else "  "
+        expected_entry_list.append(f"{indent}- [{heading}](#{_heading_anchor_get(heading)})")
+    return actual_entry_list == expected_entry_list
 
 
 def _missing_metadata_list_get(agents_path: Path) -> list[str]:
@@ -302,7 +300,7 @@ def _missing_metadata_list_get(agents_path: Path) -> list[str]:
         return ["AGENTS.md", "Table Of Contents", "Required Standards"]
     text = agents_path.read_text(encoding="utf-8")
     missing_metadata_list: list[str] = []
-    if not _table_of_contents_is_valid(text):
+    if not _is_table_of_contents_valid(text):
         missing_metadata_list.append("Table Of Contents")
     if re.search(r"(?m)^## Required Standards\s*$", text) is None:
         missing_metadata_list.append("Required Standards")
@@ -332,6 +330,41 @@ def _project_path_list_get(workspace_root: Path) -> list[Path]:
         ),
         key=lambda path: path.name,
     )
+
+
+def _project_report_missing_standard_list_get(project_report: ProjectReport) -> list[str]:
+    """Return applicable standards absent from project instructions.
+
+    Args:
+        project_report: Project classification and validation state.
+
+    Returns:
+        Sorted missing standard names.
+    """
+
+    return sorted(set(project_report["required_standard_list"]) - set(project_report["declared_standard_list"]))
+
+
+def _project_report_payload_get(project_report: ProjectReport) -> dict[str, object]:
+    """Return one JSON-compatible project report.
+
+    Args:
+        project_report: Project classification and validation state.
+
+    Returns:
+        JSON-compatible report payload.
+    """
+
+    return {
+        "declared_standard_list": project_report["declared_standard_list"],
+        "git_common_dir": str(project_report["git_common_dir"]),
+        "is_valid": _is_project_report_valid(project_report),
+        "missing_metadata_list": project_report["missing_metadata_list"],
+        "missing_standard_list": _project_report_missing_standard_list_get(project_report),
+        "path": str(project_report["path"]),
+        "required_standard_list": project_report["required_standard_list"],
+        "unavailable_standard_list": project_report["unavailable_standard_list"],
+    }
 
 
 def _python_signal_set_get(project_path: Path, path_list: list[str]) -> set[str]:
@@ -471,19 +504,20 @@ def _required_standard_list_get(project_path: Path, path_list: list[str]) -> lis
     return sorted(required_standard_set)
 
 
-def _required_standard_write(report: ProjectReport) -> None:
+def _required_standard_write(project_report: ProjectReport) -> None:
     """Add missing selections while preserving every existing local section.
 
     Args:
-        report: Project report whose missing selections should be added.
+        project_report: Project report whose missing selections should be added.
     """
 
-    if not report.missing_standard_list:
+    missing_standard_list = _project_report_missing_standard_list_get(project_report)
+    if not missing_standard_list:
         return
-    agents_path = report.path / "AGENTS.md"
+    agents_path = project_report["path"] / "AGENTS.md"
     entry_text = "".join(
         f"- `project-standards:{standard}` applies to the detected project scope.\n"
-        for standard in report.missing_standard_list
+        for standard in missing_standard_list
     )
     if not agents_path.exists():
         agents_path.write_text(
@@ -508,48 +542,18 @@ def _required_standard_write(report: ProjectReport) -> None:
     agents_path.write_text(f"{prefix}\n{entry_text}\n{suffix}", encoding="utf-8")
 
 
-def _table_of_contents_is_valid(text: str) -> bool:
-    """Return whether one root instruction file has its exact canonical table of contents.
-
-    Args:
-        text: Complete root instruction text.
-
-    Returns:
-        Whether the table of contents is first and matches every later level-two and level-three heading.
-    """
-
-    root_heading_match = re.match(r"^# [^\n]+\n", text)
-    table_heading_match = re.search(rf"(?m)^{re.escape(TABLE_OF_CONTENTS_HEADING)}[ \t]*$", text)
-    if root_heading_match is None or table_heading_match is None:
-        return False
-    if text[root_heading_match.end() : table_heading_match.start()].strip():
-        return False
-    next_heading_match = re.search(r"(?m)^## (?!Table Of Contents[ \t]*$)", text[table_heading_match.end() :])
-    if next_heading_match is None:
-        return False
-    section_end = table_heading_match.end() + next_heading_match.start()
-    actual_entry_list = [line for line in text[table_heading_match.end() : section_end].splitlines() if line.strip()]
-    later_text = text[section_end:]
-    expected_entry_list = []
-    for heading_match in re.finditer(r"(?m)^(##|###) (.+?)[ \t]*$", later_text):
-        marker, heading = heading_match.groups()
-        indent = "" if marker == "##" else "  "
-        expected_entry_list.append(f"{indent}- [{heading}](#{_heading_anchor_get(heading)})")
-    return actual_entry_list == expected_entry_list
-
-
-def _workspace_report_get(workspace_root: Path) -> tuple[list[ProjectReport], list[str]]:
+def _workspace_report_get(workspace_root: Path) -> WorkspaceReport:
     """Build complete workspace validation state.
 
     Args:
         workspace_root: Explicit workspace directory.
 
     Returns:
-        Project reports and duplicated Git common directories.
+        Complete project reports and duplicated Git common directories.
     """
 
     available_standard_set = _available_standard_set_get()
-    report_list: list[ProjectReport] = []
+    project_report_list: list[ProjectReport] = []
     for project_path in _project_path_list_get(workspace_root):
         path_list = [
             relative_path
@@ -560,8 +564,8 @@ def _workspace_report_get(workspace_root: Path) -> tuple[list[ProjectReport], li
             if (project_path / relative_path).exists() or (project_path / relative_path).is_symlink()
         ]
         agents_path = project_path / "AGENTS.md"
-        declared_standard_list = _declared_standard_list_get(agents_path)
-        report_list.append(
+        declared_standard_list = required_standard_name_list_get(agents_path)
+        project_report_list.append(
             ProjectReport(
                 declared_standard_list=declared_standard_list,
                 git_common_dir=Path(
@@ -574,33 +578,36 @@ def _workspace_report_get(workspace_root: Path) -> tuple[list[ProjectReport], li
             )
         )
     common_dir_count_by_path_map: dict[Path, int] = {}
-    for report in report_list:
-        common_dir_count_by_path_map[report.git_common_dir] = (
-            common_dir_count_by_path_map.get(report.git_common_dir, 0) + 1
-        )
+    for project_report in project_report_list:
+        git_common_dir = project_report["git_common_dir"]
+        common_dir_count_by_path_map[git_common_dir] = common_dir_count_by_path_map.get(git_common_dir, 0) + 1
     duplicate_common_dir_list = sorted(str(path) for path, count in common_dir_count_by_path_map.items() if count > 1)
-    return report_list, duplicate_common_dir_list
+    return WorkspaceReport(
+        duplicate_git_common_dir_list=duplicate_common_dir_list,
+        project_report_list=project_report_list,
+    )
 
 
 def _workspace_report_print(
     workspace_root: Path,
-    report_list: list[ProjectReport],
-    duplicate_common_dir_list: list[str],
+    workspace_report: WorkspaceReport,
 ) -> None:
     """Print deterministic workspace validation JSON.
 
     Args:
         workspace_root: Explicit workspace directory.
-        report_list: Project validation reports.
-        duplicate_common_dir_list: Git common directories used by multiple discovered worktrees.
+        workspace_report: Complete workspace validation state.
     """
 
+    duplicate_common_dir_list = workspace_report["duplicate_git_common_dir_list"]
+    project_report_list = workspace_report["project_report_list"]
     print(
         json.dumps(
             {
                 "duplicate_git_common_dir_list": duplicate_common_dir_list,
-                "is_valid": all(report.is_valid for report in report_list) and not duplicate_common_dir_list,
-                "project_list": [report.payload_get() for report in report_list],
+                "is_valid": all(_is_project_report_valid(project_report) for project_report in project_report_list)
+                and not duplicate_common_dir_list,
+                "project_list": [_project_report_payload_get(project_report) for project_report in project_report_list],
                 "workspace_root": str(workspace_root),
             },
             indent=2,
@@ -610,19 +617,44 @@ def _workspace_report_print(
 
 
 def main() -> int:
-    """Validate or update standard selections for one explicit workspace."""
+    """Validate or update standard selections for one explicit workspace.
+
+    Returns:
+        Zero when every discovered project is valid, otherwise one.
+    """
 
     args = _args_parse()
     workspace_root = args.workspace_root.resolve()
-    report_list, duplicate_common_dir_list = _workspace_report_get(workspace_root)
+    workspace_report = _workspace_report_get(workspace_root)
     if args.write:
-        if duplicate_common_dir_list:
+        if workspace_report["duplicate_git_common_dir_list"]:
             raise RuntimeError("Refusing to edit multiple worktrees of one Git common directory")
-        for report in report_list:
-            _required_standard_write(report)
-        report_list, duplicate_common_dir_list = _workspace_report_get(workspace_root)
-    _workspace_report_print(workspace_root, report_list, duplicate_common_dir_list)
-    return int(not all(report.is_valid for report in report_list) or bool(duplicate_common_dir_list))
+        for project_report in workspace_report["project_report_list"]:
+            _required_standard_write(project_report)
+        workspace_report = _workspace_report_get(workspace_root)
+    _workspace_report_print(workspace_root, workspace_report)
+    return int(
+        not all(_is_project_report_valid(project_report) for project_report in workspace_report["project_report_list"])
+        or bool(workspace_report["duplicate_git_common_dir_list"])
+    )
+
+
+class ProjectReport(TypedDict):
+    """Store one repository classification and validation result."""
+
+    declared_standard_list: list[str]
+    git_common_dir: Path
+    missing_metadata_list: list[str]
+    path: Path
+    required_standard_list: list[str]
+    unavailable_standard_list: list[str]
+
+
+class WorkspaceReport(TypedDict):
+    """Store complete workspace validation state."""
+
+    duplicate_git_common_dir_list: list[str]
+    project_report_list: list[ProjectReport]
 
 
 if __name__ == "__main__":

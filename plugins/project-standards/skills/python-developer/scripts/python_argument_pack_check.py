@@ -10,12 +10,11 @@ from __future__ import annotations
 
 import argparse
 import ast
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 import re
 import sys
-from typing import Iterable
+from typing import TypedDict
 
 from lib.checker_runtime import main_project_scope_path_list_resolve, scope_args_add
 
@@ -78,31 +77,6 @@ def args_parse() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _arg_object_field_count_map_compute(call: ast.Call) -> dict[str, int]:
-    """Count object-field arguments by base name.
-
-    Args:
-        call: Call node.
-
-    Returns:
-        Mapping base name -> count of arguments sourced from `<base>.<field>`.
-    """
-
-    counts: dict[str, int] = {}
-
-    values: list[ast.AST] = list(call.args)
-    values.extend(keyword.value for keyword in call.keywords)
-
-    for value in values:
-        if isinstance(value, ast.Starred):
-            continue
-        base = _attribute_base_name_get(value)
-        if base is None:
-            continue
-        counts[base] = counts.get(base, 0) + 1
-    return counts
-
-
 def _argument_explosion_check_result_build(candidates: Iterable[FunctionInfo], max_args: int) -> FindingSplitResult:
     """Detect forbidden long signatures with dependency-like names.
 
@@ -114,45 +88,74 @@ def _argument_explosion_check_result_build(candidates: Iterable[FunctionInfo], m
         Split finding result.
     """
 
-    fails: list[Finding] = []
-    warns: list[Finding] = []
+    fail_finding_list: list[Finding] = []
+    warn_finding_list: list[Finding] = []
 
     for item in candidates:
-        if item.comment_reason is not None:
-            warns.append(
+        if item["comment_reason"] is not None:
+            warn_finding_list.append(
                 Finding(
                     level="WARN",
-                    path=item.path,
-                    lineno=item.lineno,
-                    function_name=item.qualname,
+                    path=item["path"],
+                    lineno=item["lineno"],
+                    function_name=item["qualname"],
                     reason=(
                         "argpack allow-override is applied"
-                        if item.comment_reason != "MISSING_REASON"
+                        if item["comment_reason"] != "MISSING_REASON"
                         else "argpack allow-override is applied without reason"
                     ),
                 )
             )
             continue
 
-        if item.args_count <= max_args:
+        if item["argument_count"] <= max_args:
             continue
-        if not item.dependency_param_list:
+        if not item["dependency_parameter_name_list"]:
             continue
 
-        fails.append(
+        fail_finding_list.append(
             Finding(
                 level="FAIL",
-                path=item.path,
-                lineno=item.lineno,
-                function_name=item.qualname,
+                path=item["path"],
+                lineno=item["lineno"],
+                function_name=item["qualname"],
                 reason=(
-                    f"argument explosion: args_count={item.args_count} > max_args={max_args} "
-                    f"with dependency-like parameters {sorted(item.dependency_param_list)}"
+                    f"argument explosion: args_count={item['argument_count']} > max_args={max_args} "
+                    "with dependency-like parameters "
+                    f"{sorted(item['dependency_parameter_name_list'])}"
                 ),
             )
         )
 
-    return FindingSplitResult(fail_finding_list=fails, warn_finding_list=warns)
+    return FindingSplitResult(
+        fail_finding_list=fail_finding_list,
+        warn_finding_list=warn_finding_list,
+    )
+
+
+def _argument_field_count_by_object_name_map_compute(call: ast.Call) -> dict[str, int]:
+    """Count object-field arguments by base name.
+
+    Args:
+        call: Call node.
+
+    Returns:
+        Mapping base name -> count of arguments sourced from `<base>.<field>`.
+    """
+
+    argument_field_count_by_object_name_map: dict[str, int] = {}
+
+    argument_value_list: list[ast.AST] = list(call.args)
+    argument_value_list.extend(keyword.value for keyword in call.keywords)
+
+    for value in argument_value_list:
+        if isinstance(value, ast.Starred):
+            continue
+        base = _attribute_base_name_get(value)
+        if base is None:
+            continue
+        argument_field_count_by_object_name_map[base] = argument_field_count_by_object_name_map.get(base, 0) + 1
+    return argument_field_count_by_object_name_map
 
 
 def _attribute_base_name_get(node: ast.AST) -> str | None:
@@ -219,7 +222,7 @@ def _finding_text_get(item: Finding) -> str:
         Formatted line.
     """
 
-    return f"{item.level}: {item.path}:{item.lineno} {item.function_name} -> {item.reason}"
+    return f"{item['level']}: {item['path']}:{item['lineno']} " f"{item['function_name']} -> {item['reason']}"
 
 
 def _function_arg_list_collect(node: ast.AST) -> list[str]:
@@ -232,15 +235,32 @@ def _function_arg_list_collect(node: ast.AST) -> list[str]:
         Ordered argument names.
     """
 
-    names: list[str] = []
+    argument_name_list: list[str] = []
     for arg in getattr(node.args, "posonlyargs", []):
-        names.append(arg.arg)
+        argument_name_list.append(arg.arg)
     for arg in node.args.args:
-        names.append(arg.arg)
+        argument_name_list.append(arg.arg)
     for arg in node.args.kwonlyargs:
-        names.append(arg.arg)
-    names = [name for name in names if name not in {"self", "cls"}]
-    return names
+        argument_name_list.append(arg.arg)
+    return [name for name in argument_name_list if name not in {"self", "cls"}]
+
+
+def _helper_name_set_by_module_name_map_build(
+    candidates: Iterable[FunctionInfo],
+) -> dict[str, set[str]]:
+    """Build helper name index by module.
+
+    Args:
+        candidates: Function candidates.
+
+    Returns:
+        Mapping module name -> helper bare names.
+    """
+
+    helper_name_set_by_module_name_map: dict[str, set[str]] = {}
+    for item in candidates:
+        helper_name_set_by_module_name_map.setdefault(item["module_name"], set()).add(item["name"])
+    return helper_name_set_by_module_name_map
 
 
 def _is_classmethod(node: ast.AST) -> bool:
@@ -310,14 +330,16 @@ def _module_candidate_scan_result_build(path: Path) -> ModuleCandidateScanResult
     tree = ast.parse(source, filename=str(path))
 
     module_name = path.as_posix()
-    candidates: list[FunctionInfo] = []
-    instance_methods: list[InstanceMethodSpec] = []
+    function_candidate_list: list[FunctionInfo] = []
+    instance_method_list: list[InstanceMethodSpec] = []
 
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            args = _function_arg_list_collect(node)
-            dependencies = [arg for arg in args if _is_dependency_like(arg)]
-            candidates.append(
+            argument_name_list = _function_arg_list_collect(node)
+            dependency_parameter_name_list = [
+                argument_name for argument_name in argument_name_list if _is_dependency_like(argument_name)
+            ]
+            function_candidate_list.append(
                 FunctionInfo(
                     path=path,
                     lineno=node.lineno,
@@ -325,8 +347,8 @@ def _module_candidate_scan_result_build(path: Path) -> ModuleCandidateScanResult
                     name=node.name,
                     module_name=module_name,
                     is_staticmethod=False,
-                    dependency_param_list=dependencies,
-                    args_count=len(args),
+                    dependency_parameter_name_list=dependency_parameter_name_list,
+                    argument_count=len(argument_name_list),
                     node=node,
                     comment_reason=_comment_reason_get(source_line_list, node.lineno),
                 )
@@ -342,9 +364,11 @@ def _module_candidate_scan_result_build(path: Path) -> ModuleCandidateScanResult
 
             qualname = f"{node.name}.{class_item.name}"
             if _is_staticmethod(class_item):
-                args = _function_arg_list_collect(class_item)
-                dependencies = [arg for arg in args if _is_dependency_like(arg)]
-                candidates.append(
+                argument_name_list = _function_arg_list_collect(class_item)
+                dependency_parameter_name_list = [
+                    argument_name for argument_name in argument_name_list if _is_dependency_like(argument_name)
+                ]
+                function_candidate_list.append(
                     FunctionInfo(
                         path=path,
                         lineno=class_item.lineno,
@@ -352,77 +376,64 @@ def _module_candidate_scan_result_build(path: Path) -> ModuleCandidateScanResult
                         name=class_item.name,
                         module_name=module_name,
                         is_staticmethod=True,
-                        dependency_param_list=dependencies,
-                        args_count=len(args),
+                        dependency_parameter_name_list=dependency_parameter_name_list,
+                        argument_count=len(argument_name_list),
                         node=class_item,
                         comment_reason=_comment_reason_get(source_line_list, class_item.lineno),
                     )
                 )
             elif not _is_classmethod(class_item):
-                instance_methods.append(InstanceMethodSpec(qualname=qualname, node=class_item))
+                instance_method_list.append(InstanceMethodSpec(qualname=qualname, node=class_item))
 
     return ModuleCandidateScanResult(
-        function_candidate_list=candidates,
-        instance_method_list=instance_methods,
+        function_candidate_list=function_candidate_list,
+        instance_method_list=instance_method_list,
     )
-
-
-def _module_helper_index_build(candidates: Iterable[FunctionInfo]) -> dict[str, set[str]]:
-    """Build helper name index by module.
-
-    Args:
-        candidates: Function candidates.
-
-    Returns:
-        Mapping module name -> helper bare names.
-    """
-
-    index: dict[str, set[str]] = {}
-    for item in candidates:
-        index.setdefault(item.module_name, set()).add(item.name)
-    return index
 
 
 def _pseudo_method_call_finding_list_build(
     *,
     candidates: Iterable[FunctionInfo],
-    module_instance_method_map: Mapping[str, list[InstanceMethodSpec]],
+    instance_method_list_by_module_name_map: Mapping[str, list[InstanceMethodSpec]],
 ) -> list[Finding]:
     """Detect helper callsites that forward object-field packs.
 
     Args:
         candidates: Helper candidates.
-        module_instance_method_map: Instance methods by module.
+        instance_method_list_by_module_name_map: Instance methods keyed by module.
 
     Returns:
         Failure findings for pseudo-method helper calls.
     """
 
-    helper_index = _module_helper_index_build(candidates)
-    fails: list[Finding] = []
+    helper_name_set_by_module_name_map = _helper_name_set_by_module_name_map_build(candidates)
+    fail_finding_list: list[Finding] = []
 
-    for module_name, methods in module_instance_method_map.items():
-        helper_names = helper_index.get(module_name, set())
-        if not helper_names:
+    for module_name, instance_method_list in instance_method_list_by_module_name_map.items():
+        helper_name_set = helper_name_set_by_module_name_map.get(module_name, set())
+        if not helper_name_set:
             continue
 
-        for method in methods:
-            for call in [n for n in ast.walk(method.node) if isinstance(n, ast.Call)]:
+        for method in instance_method_list:
+            for call in [node for node in ast.walk(method["node"]) if isinstance(node, ast.Call)]:
                 name = _called_name_get(call)
-                if name is None or name not in helper_names:
+                if name is None or name not in helper_name_set:
                     continue
 
-                base_counts = _arg_object_field_count_map_compute(call)
-                violating_base = next((base for base, count in base_counts.items() if count >= 2), None)
+                argument_field_count_by_object_name_map = _argument_field_count_by_object_name_map_compute(call)
+                violating_base = next(
+                    (base for base, count in argument_field_count_by_object_name_map.items() if count >= 2),
+                    None,
+                )
                 if violating_base is None:
                     continue
 
-                fails.append(
+                fail_finding_list.append(
                     Finding(
                         level="FAIL",
                         path=Path(module_name),
                         lineno=call.lineno,
-                        function_name=method.qualname,
+                        function_name=method["qualname"],
                         reason=(
                             "pseudo-method helper call: 2+ arguments sourced from "
                             f"{violating_base}.* into helper `{name}`; convert helper to method/collaborator"
@@ -430,7 +441,7 @@ def _pseudo_method_call_finding_list_build(
                     )
                 )
 
-    return fails
+    return fail_finding_list
 
 
 def _repeated_pack_check_result_build(
@@ -450,45 +461,51 @@ def _repeated_pack_check_result_build(
         Split finding result.
     """
 
-    by_module: dict[str, list[FunctionInfo]] = {}
+    function_info_list_by_module_name_map: dict[str, list[FunctionInfo]] = {}
     for item in candidates:
-        by_module.setdefault(item.module_name, []).append(item)
+        function_info_list_by_module_name_map.setdefault(item["module_name"], []).append(item)
 
-    fails: list[Finding] = []
-    warns: list[Finding] = []
+    fail_finding_list: list[Finding] = []
+    warn_finding_list: list[Finding] = []
 
-    for _, module_items in by_module.items():
-        for index, left in enumerate(module_items):
-            if left.comment_reason is not None:
+    for function_info_list in function_info_list_by_module_name_map.values():
+        for index, left in enumerate(function_info_list):
+            if left["comment_reason"] is not None:
                 continue
-            if not left.dependency_param_list:
+            if not left["dependency_parameter_name_list"]:
                 continue
-            for right in module_items[index + 1 :]:
-                if right.comment_reason is not None:
+            for right in function_info_list[index + 1 :]:
+                if right["comment_reason"] is not None:
                     continue
-                if not right.dependency_param_list:
+                if not right["dependency_parameter_name_list"]:
                     continue
-                shared = sorted(set(left.dependency_param_list) & set(right.dependency_param_list))
-                if len(shared) < min_shared:
+                shared_dependency_parameter_name_list = sorted(
+                    set(left["dependency_parameter_name_list"]) & set(right["dependency_parameter_name_list"])
+                )
+                if len(shared_dependency_parameter_name_list) < min_shared:
                     continue
 
                 finding = Finding(
                     level="FAIL" if fail_on_repeated_pack else "WARN",
-                    path=left.path,
-                    lineno=left.lineno,
-                    function_name=left.qualname,
+                    path=left["path"],
+                    lineno=left["lineno"],
+                    function_name=left["qualname"],
                     reason=(
                         "repeated dependency-pack across functions "
-                        f"{left.qualname} <-> {right.qualname}; shared={shared}; "
+                        f"{left['qualname']} <-> {right['qualname']}; "
+                        f"shared={shared_dependency_parameter_name_list}; "
                         "consider collaborator class or private owner method"
                     ),
                 )
                 if fail_on_repeated_pack:
-                    fails.append(finding)
+                    fail_finding_list.append(finding)
                 else:
-                    warns.append(finding)
+                    warn_finding_list.append(finding)
 
-    return FindingSplitResult(fail_finding_list=fails, warn_finding_list=warns)
+    return FindingSplitResult(
+        fail_finding_list=fail_finding_list,
+        warn_finding_list=warn_finding_list,
+    )
 
 
 def _scope_path_list_build(args: argparse.Namespace) -> list[Path]:
@@ -528,46 +545,61 @@ def main() -> int:
         print("INFO: argument-pack check skipped (no Python files in scope).")
         return 0
 
-    all_candidates: list[FunctionInfo] = []
-    module_methods: dict[str, list[InstanceMethodSpec]] = {}
+    function_info_list: list[FunctionInfo] = []
+    instance_method_list_by_module_name_map: dict[str, list[InstanceMethodSpec]] = {}
 
     for path in scope:
         scan_result = _module_candidate_scan_result_build(path)
-        all_candidates.extend(scan_result.function_candidate_list)
-        module_methods[path.as_posix()] = scan_result.instance_method_list
+        function_info_list.extend(scan_result["function_candidate_list"])
+        instance_method_list_by_module_name_map[path.as_posix()] = scan_result["instance_method_list"]
 
-    fail_findings: list[Finding] = []
-    warn_findings: list[Finding] = []
+    fail_finding_list: list[Finding] = []
+    warn_finding_list: list[Finding] = []
 
-    argument_explosion_result = _argument_explosion_check_result_build(all_candidates, max_args=args.max_args)
-    fail_findings.extend(argument_explosion_result.fail_finding_list)
-    warn_findings.extend(argument_explosion_result.warn_finding_list)
+    argument_explosion_result = _argument_explosion_check_result_build(
+        function_info_list,
+        max_args=args.max_args,
+    )
+    fail_finding_list.extend(argument_explosion_result["fail_finding_list"])
+    warn_finding_list.extend(argument_explosion_result["warn_finding_list"])
 
     repeated_pack_result = _repeated_pack_check_result_build(
-        all_candidates,
+        function_info_list,
         min_shared=args.min_shared,
         fail_on_repeated_pack=args.fail_on_repeated_pack,
     )
-    fail_findings.extend(repeated_pack_result.fail_finding_list)
-    warn_findings.extend(repeated_pack_result.warn_finding_list)
+    fail_finding_list.extend(repeated_pack_result["fail_finding_list"])
+    warn_finding_list.extend(repeated_pack_result["warn_finding_list"])
 
-    fail_findings.extend(
-        _pseudo_method_call_finding_list_build(candidates=all_candidates, module_instance_method_map=module_methods)
+    fail_finding_list.extend(
+        _pseudo_method_call_finding_list_build(
+            candidates=function_info_list,
+            instance_method_list_by_module_name_map=instance_method_list_by_module_name_map,
+        )
     )
 
-    if fail_findings:
+    if fail_finding_list:
         print("Python argument-pack violations:")
-        for finding in sorted(fail_findings, key=lambda x: (x.path.as_posix(), x.lineno, x.function_name)):
+        for finding in sorted(
+            fail_finding_list,
+            key=lambda item: (item["path"].as_posix(), item["lineno"], item["function_name"]),
+        ):
             print(_finding_text_get(finding))
-        if warn_findings:
+        if warn_finding_list:
             print("\nPython argument-pack warnings:")
-            for finding in sorted(warn_findings, key=lambda x: (x.path.as_posix(), x.lineno, x.function_name)):
+            for finding in sorted(
+                warn_finding_list,
+                key=lambda item: (item["path"].as_posix(), item["lineno"], item["function_name"]),
+            ):
                 print(_finding_text_get(finding))
         return 1
 
-    if warn_findings:
+    if warn_finding_list:
         print("Python argument-pack warnings:")
-        for finding in sorted(warn_findings, key=lambda x: (x.path.as_posix(), x.lineno, x.function_name)):
+        for finding in sorted(
+            warn_finding_list,
+            key=lambda item: (item["path"].as_posix(), item["lineno"], item["function_name"]),
+        ):
             print(_finding_text_get(finding))
         print("Python argument-pack check passed with warnings.")
         return 0
@@ -576,8 +608,7 @@ def main() -> int:
     return 0
 
 
-@dataclass(frozen=True)
-class Finding:
+class Finding(TypedDict):
     """Represent one checker finding.
 
     Args:
@@ -595,16 +626,14 @@ class Finding:
     reason: str
 
 
-@dataclass(frozen=True)
-class FindingSplitResult:
+class FindingSplitResult(TypedDict):
     """Represent one split finding collection."""
 
     fail_finding_list: list[Finding]
     warn_finding_list: list[Finding]
 
 
-@dataclass(frozen=True)
-class FunctionInfo:
+class FunctionInfo(TypedDict):
     """Represent one helper candidate.
 
     Args:
@@ -614,15 +643,15 @@ class FunctionInfo:
         name: Bare function name.
         module_name: File-local module identifier.
         is_staticmethod: Whether candidate is `@staticmethod`.
-        dependency_param_list: Dependency-like parameter names.
-        args_count: Count of explicit named arguments excluding `self`/`cls`.
+        dependency_parameter_name_list: Dependency-like parameter names.
+        argument_count: Count of explicit named arguments excluding `self`/`cls`.
         node: AST node for the function definition.
         comment_reason: Allow-comment reason text when present.
     """
 
-    args_count: int
+    argument_count: int
     comment_reason: str | None
-    dependency_param_list: list[str]
+    dependency_parameter_name_list: list[str]
     is_staticmethod: bool
     lineno: int
     module_name: str
@@ -632,16 +661,14 @@ class FunctionInfo:
     qualname: str
 
 
-@dataclass(frozen=True)
-class InstanceMethodSpec:
+class InstanceMethodSpec(TypedDict):
     """Represent one instance method used for pseudo-method helper checks."""
 
     node: ast.AST
     qualname: str
 
 
-@dataclass(frozen=True)
-class ModuleCandidateScanResult:
+class ModuleCandidateScanResult(TypedDict):
     """Represent one module-level candidate scan."""
 
     function_candidate_list: list[FunctionInfo]

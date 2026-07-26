@@ -16,3 +16,13 @@ Every workflow-owned subagent role contract MUST state the role mission, scope, 
 ## Plugin Support Owners
 
 One provider path `plugins/<plugin_name>/lib/<owner>/` is a `Self-contained` plugin-local owner for shared workflow or subagent protocols, Markdown contracts, templates, handoff assets, state-machine or algorithm specifications, and owner-local `tool` or `test`; every owner-local asset MUST remain under that owner root.
+
+## Executable Standard Ownership
+
+- A capability `Skill` that owns one mechanically enforceable standard subset MAY declare one owner-local `<skill-root>/checker.toml`.
+- `<skill-root>/checker.toml` identifies only checker scripts owned under that same skill root. It MUST NOT restate semantic rules, consumer-specific exceptions, or project-local paths.
+- Checker implementation, samples, and checker behavior tests remain under the owning skill root. A second skill MUST reference or reuse the real owner instead of copying its checker.
+- Shared checker discovery, scope resolution, process execution, and diagnostic protocol belong to one plugin support owner under `plugins/project-standards/lib/project_standards/`.
+- The shared runner discovers checker manifests only for capabilities already selected by the consumer's `Required Standards`; checker discovery MUST NOT create a second standard-selection map.
+- Exact manifest schema, scope strategies, process transport, diagnostics, and failure semantics are owned by root `DESIGN.md`, section `Манифест И Протокол Процесса`.
+- Mechanical checker success does not prove semantic conformance and MUST NOT replace an applicable semantic audit.

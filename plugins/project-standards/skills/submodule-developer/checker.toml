@@ -1,0 +1,9 @@
+schema_version = 1
+owner = "project-standards:submodule-developer"
+
+[[check_list]]
+id = "submodule.python-portability"
+script_path = "scripts/python_submodule_portability_check.py"
+scope_strategy = "full-on-change"
+path_include_glob_list = [".gitmodules", "**/*.py"]
+trigger_path_include_glob_list = ["**/*"]

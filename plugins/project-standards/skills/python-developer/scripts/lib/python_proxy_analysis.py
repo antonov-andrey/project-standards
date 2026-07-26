@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import ast
-from dataclasses import dataclass
 from pathlib import Path
+from typing import TypedDict
 
 TOP_LEVEL_ALLOWLIST = {
     "main",
@@ -76,18 +76,18 @@ def forwarding_call_analysis_build(call: ast.Call, *, param_list: list[str]) -> 
         Forwarded-call analysis result.
     """
 
-    used_params: set[str] = set()
+    used_parameter_name_set: set[str] = set()
     has_literal = False
 
     for arg in call.args:
         if isinstance(arg, ast.Starred):
             value = arg.value
-            if not isinstance(value, ast.Name) or value.id not in param_list or value.id in used_params:
+            if not isinstance(value, ast.Name) or value.id not in param_list or value.id in used_parameter_name_set:
                 return ForwardingCallAnalysis(is_valid=False, has_literal=False)
-            used_params.add(value.id)
+            used_parameter_name_set.add(value.id)
             continue
-        if isinstance(arg, ast.Name) and arg.id in param_list and arg.id not in used_params:
-            used_params.add(arg.id)
+        if isinstance(arg, ast.Name) and arg.id in param_list and arg.id not in used_parameter_name_set:
+            used_parameter_name_set.add(arg.id)
             continue
         if _is_literal_like(arg):
             has_literal = True
@@ -97,14 +97,14 @@ def forwarding_call_analysis_build(call: ast.Call, *, param_list: list[str]) -> 
     for keyword in call.keywords:
         value = keyword.value
         if keyword.arg is None:
-            if not isinstance(value, ast.Name) or value.id not in param_list or value.id in used_params:
+            if not isinstance(value, ast.Name) or value.id not in param_list or value.id in used_parameter_name_set:
                 return ForwardingCallAnalysis(is_valid=False, has_literal=False)
-            used_params.add(value.id)
+            used_parameter_name_set.add(value.id)
             continue
         if isinstance(value, ast.Name) and value.id in param_list:
-            if value.id in used_params:
+            if value.id in used_parameter_name_set:
                 return ForwardingCallAnalysis(is_valid=False, has_literal=False)
-            used_params.add(value.id)
+            used_parameter_name_set.add(value.id)
             continue
         if _is_literal_like(value):
             has_literal = True
@@ -128,32 +128,44 @@ def is_parameter_forwarding_pure(call: ast.Call, *, param_list: list[str]) -> bo
     if not param_list:
         return len(call.args) == 0 and len(call.keywords) == 0
 
-    forwarded: set[str] = set()
+    forwarded_parameter_name_set: set[str] = set()
     for arg in call.args:
         if isinstance(arg, ast.Starred):
             value = arg.value
-            if not isinstance(value, ast.Name) or value.id not in param_list or value.id in forwarded:
+            if (
+                not isinstance(value, ast.Name)
+                or value.id not in param_list
+                or value.id in forwarded_parameter_name_set
+            ):
                 return False
-            forwarded.add(value.id)
+            forwarded_parameter_name_set.add(value.id)
             continue
-        if not isinstance(arg, ast.Name) or arg.id not in param_list or arg.id in forwarded:
+        if not isinstance(arg, ast.Name) or arg.id not in param_list or arg.id in forwarded_parameter_name_set:
             return False
-        forwarded.add(arg.id)
+        forwarded_parameter_name_set.add(arg.id)
 
     for keyword in call.keywords:
         if keyword.arg is None:
             value = keyword.value
-            if not isinstance(value, ast.Name) or value.id not in param_list or value.id in forwarded:
+            if (
+                not isinstance(value, ast.Name)
+                or value.id not in param_list
+                or value.id in forwarded_parameter_name_set
+            ):
                 return False
-            forwarded.add(value.id)
+            forwarded_parameter_name_set.add(value.id)
             continue
         if keyword.arg not in param_list:
             return False
-        if not isinstance(keyword.value, ast.Name) or keyword.value.id != keyword.arg or keyword.arg in forwarded:
+        if (
+            not isinstance(keyword.value, ast.Name)
+            or keyword.value.id != keyword.arg
+            or keyword.arg in forwarded_parameter_name_set
+        ):
             return False
-        forwarded.add(keyword.arg)
+        forwarded_parameter_name_set.add(keyword.arg)
 
-    return forwarded == set(param_list)
+    return forwarded_parameter_name_set == set(param_list)
 
 
 def is_probable_constructor_target(call: ast.Call) -> bool:
@@ -184,18 +196,18 @@ def parameter_name_list_collect(node: ast.AST) -> list[str]:
         Ordered parameter names.
     """
 
-    names: list[str] = []
+    parameter_name_list: list[str] = []
     for arg in getattr(node.args, "posonlyargs", []):
-        names.append(arg.arg)
+        parameter_name_list.append(arg.arg)
     for arg in node.args.args:
-        names.append(arg.arg)
+        parameter_name_list.append(arg.arg)
     if node.args.vararg is not None:
-        names.append(node.args.vararg.arg)
+        parameter_name_list.append(node.args.vararg.arg)
     for arg in node.args.kwonlyargs:
-        names.append(arg.arg)
+        parameter_name_list.append(arg.arg)
     if node.args.kwarg is not None:
-        names.append(node.args.kwarg.arg)
-    return [name for name in names if name not in {"self", "cls"}]
+        parameter_name_list.append(node.args.kwarg.arg)
+    return [name for name in parameter_name_list if name not in {"self", "cls"}]
 
 
 def _is_super_init_call(call: ast.Call) -> bool:
@@ -241,11 +253,11 @@ def thin_subclass_violation_get(path: Path, node: ast.ClassDef) -> Finding | Non
 
     if not node.bases:
         return None
-    methods = _meaningful_method_list_build(node)
-    if len(methods) != 1 or methods[0].name != "__init__":
+    method_list = _meaningful_method_list_build(node)
+    if len(method_list) != 1 or method_list[0].name != "__init__":
         return None
 
-    init_method = methods[0]
+    init_method = method_list[0]
     body = executable_statement_list_collect(init_method)
     if len(body) != 1:
         return None
@@ -254,7 +266,7 @@ def thin_subclass_violation_get(path: Path, node: ast.ClassDef) -> Finding | Non
         return None
 
     forwarding_analysis = forwarding_call_analysis_build(call, param_list=parameter_name_list_collect(init_method))
-    if not forwarding_analysis.is_valid or not forwarding_analysis.has_literal:
+    if not forwarding_analysis["is_valid"] or not forwarding_analysis["has_literal"]:
         return None
     return Finding(
         path=path,
@@ -264,8 +276,7 @@ def thin_subclass_violation_get(path: Path, node: ast.ClassDef) -> Finding | Non
     )
 
 
-@dataclass(frozen=True)
-class Finding:
+class Finding(TypedDict):
     """Represent one checker finding."""
 
     lineno: int
@@ -274,8 +285,7 @@ class Finding:
     symbol: str
 
 
-@dataclass(frozen=True)
-class ForwardingCallAnalysis:
+class ForwardingCallAnalysis(TypedDict):
     """Represent one forwarded-call analysis result."""
 
     has_literal: bool

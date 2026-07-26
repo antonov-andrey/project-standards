@@ -1,0 +1,16 @@
+schema_version = 1
+owner = "project-standards:project-instruction-developer"
+
+[[check_list]]
+id = "instruction.repository-reference"
+script_path = "scripts/repository_reference_check.py"
+scope_strategy = "full-on-change"
+path_include_glob_list = ["*", "**/*"]
+trigger_path_include_glob_list = ["**/*"]
+
+[[check_list]]
+id = "instruction.project-path-declaration"
+script_path = "scripts/project_path_contract_check.py"
+scope_strategy = "full-on-change"
+path_include_glob_list = ["AGENTS.md", "**/*.py", "*.py", ".gitmodules"]
+trigger_path_include_glob_list = ["**/*"]

@@ -1,0 +1,46 @@
+[build-system]
+build-backend = "hatchling.build"
+requires = ["hatchling>=1.27,<2"]
+
+[project]
+dependencies = [
+    "black>=26.5.1,<27",
+    "jedi>=0.19.2,<1",
+    "pathspec>=0.12.1,<2",
+    "pytest>=9,<10",
+    "vulture>=2.16,<3",
+]
+description = "Development and test tooling for provider-owned project standards"
+name = "project-standards"
+requires-python = ">=3.14"
+version = "0.1.0"
+
+[project.scripts]
+project-standard-check = "project_standards.project_standard_check:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["plugins/project-standards/lib/project_standards"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"plugins/project-standards/skills/project-documentation-developer/checker.toml" = "project_standards/checker_assets/project-documentation-developer/checker.toml"
+"plugins/project-standards/skills/project-documentation-developer/scripts" = "project_standards/checker_assets/project-documentation-developer/scripts"
+"plugins/project-standards/skills/project-foundation/checker.toml" = "project_standards/checker_assets/project-foundation/checker.toml"
+"plugins/project-standards/skills/project-foundation/scripts" = "project_standards/checker_assets/project-foundation/scripts"
+"plugins/project-standards/skills/project-instruction-developer/checker.toml" = "project_standards/checker_assets/project-instruction-developer/checker.toml"
+"plugins/project-standards/skills/project-instruction-developer/scripts" = "project_standards/checker_assets/project-instruction-developer/scripts"
+"plugins/project-standards/skills/python-developer/checker.toml" = "project_standards/checker_assets/python-developer/checker.toml"
+"plugins/project-standards/skills/python-developer/scripts" = "project_standards/checker_assets/python-developer/scripts"
+"plugins/project-standards/skills/pytest-developer/checker.toml" = "project_standards/checker_assets/pytest-developer/checker.toml"
+"plugins/project-standards/skills/pytest-developer/scripts" = "project_standards/checker_assets/pytest-developer/scripts"
+"plugins/project-standards/skills/rest-api-server-developer/checker.toml" = "project_standards/checker_assets/rest-api-server-developer/checker.toml"
+"plugins/project-standards/skills/rest-api-server-developer/scripts" = "project_standards/checker_assets/rest-api-server-developer/scripts"
+"plugins/project-standards/skills/python-cli-developer/checker.toml" = "project_standards/checker_assets/python-cli-developer/checker.toml"
+"plugins/project-standards/skills/python-cli-developer/scripts" = "project_standards/checker_assets/python-cli-developer/scripts"
+"plugins/project-standards/skills/sqlalchemy-developer/checker.toml" = "project_standards/checker_assets/sqlalchemy-developer/checker.toml"
+"plugins/project-standards/skills/sqlalchemy-developer/scripts" = "project_standards/checker_assets/sqlalchemy-developer/scripts"
+"plugins/project-standards/skills/submodule-developer/checker.toml" = "project_standards/checker_assets/submodule-developer/checker.toml"
+"plugins/project-standards/skills/submodule-developer/scripts" = "project_standards/checker_assets/submodule-developer/scripts"
+
+[tool.pytest.ini_options]
+addopts = "-p project_standards.pytest_plugin"
+pythonpath = ["plugins/project-standards/lib"]

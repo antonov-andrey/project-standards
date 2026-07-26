@@ -6,9 +6,9 @@ from __future__ import annotations
 
 import argparse
 import ast
-from dataclasses import dataclass
 from pathlib import Path
 import sys
+from typing import TypedDict
 
 from lib.checker_runtime import (
     import_root_set,
@@ -63,17 +63,17 @@ def _category_count(tree: ast.Module) -> int:
         Count of present top-level symbol categories.
     """
 
-    categories: set[str] = set()
+    category_set: set[str] = set()
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            categories.add("function")
+            category_set.add("function")
             continue
         if isinstance(node, ast.ClassDef):
-            categories.add("class")
+            category_set.add("class")
             continue
         if isinstance(node, ast.Assign):
-            categories.add("constant")
-    return len(categories)
+            category_set.add("constant")
+    return len(category_set)
 
 
 def _module_analyze(
@@ -99,24 +99,24 @@ def _module_analyze(
         return None
 
     tree = python_module_parse(path)
-    roots = import_root_set(tree)
-    names = _top_level_symbol_name_list_build(tree)
-    prefixes = _symbol_prefix_set(names)
-    categories = _category_count(tree)
-    if len(roots) < min_import_roots:
+    imported_root_set = import_root_set(tree)
+    symbol_name_list = _top_level_symbol_name_list_build(tree)
+    symbol_prefix_set = _symbol_prefix_set(symbol_name_list)
+    category_count = _category_count(tree)
+    if len(imported_root_set) < min_import_roots:
         return None
-    if len(names) < min_symbols:
+    if len(symbol_name_list) < min_symbols:
         return None
-    if len(prefixes) < min_prefixes:
+    if len(symbol_prefix_set) < min_prefixes:
         return None
-    if categories < 2:
+    if category_count < 2:
         return None
     return Finding(
         path=path,
-        import_root_count=len(roots),
-        symbol_count=len(names),
-        category_count=categories,
-        prefix_count=len(prefixes),
+        import_root_count=len(imported_root_set),
+        symbol_count=len(symbol_name_list),
+        category_count=category_count,
+        prefix_count=len(symbol_prefix_set),
     )
 
 
@@ -130,13 +130,13 @@ def _symbol_prefix_set(name_list: list[str]) -> set[str]:
         Distinct coarse symbol prefixes.
     """
 
-    prefixes: set[str] = set()
+    prefix_set: set[str] = set()
     for name in name_list:
         normalized = name.lstrip("_")
         if not normalized:
             continue
-        prefixes.add(normalized.split("_", 1)[0].lower())
-    return prefixes
+        prefix_set.add(normalized.split("_", 1)[0].lower())
+    return prefix_set
 
 
 def _top_level_symbol_name_list_build(tree: ast.Module) -> list[str]:
@@ -149,16 +149,16 @@ def _top_level_symbol_name_list_build(tree: ast.Module) -> list[str]:
         Top-level symbol names.
     """
 
-    names: list[str] = []
+    name_list: list[str] = []
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            names.append(node.name)
+            name_list.append(node.name)
             continue
         if isinstance(node, ast.Assign):
             for target in node.targets:
                 if isinstance(target, ast.Name):
-                    names.append(target.id)
-    return names
+                    name_list.append(target.id)
+    return name_list
 
 
 def main() -> int:
@@ -170,7 +170,7 @@ def main() -> int:
 
     args = args_parse()
     scope = main_project_scope_path_list_resolve(args.paths, args.scope)
-    findings = [
+    finding_list = [
         finding
         for path in scope
         if (
@@ -184,22 +184,21 @@ def main() -> int:
         is not None
     ]
 
-    if not findings:
+    if not finding_list:
         print("Python generic bucket-module check passed.")
         return 0
 
-    for finding in findings:
+    for finding in finding_list:
         print(
-            f"{finding.path}: generic bucket module is heterogeneous enough to fail "
-            f"(imports={finding.import_root_count}, symbols={finding.symbol_count}, "
-            f"categories={finding.category_count}, prefixes={finding.prefix_count})."
+            f"{finding['path']}: generic bucket module is heterogeneous enough to fail "
+            f"(imports={finding['import_root_count']}, symbols={finding['symbol_count']}, "
+            f"categories={finding['category_count']}, prefixes={finding['prefix_count']})."
         )
     print("FAIL: Python generic bucket-module check failed.")
     return 1
 
 
-@dataclass(frozen=True)
-class Finding:
+class Finding(TypedDict):
     """Represent one generic-bucket finding."""
 
     category_count: int
