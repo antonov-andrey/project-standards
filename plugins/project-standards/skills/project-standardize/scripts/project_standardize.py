@@ -16,7 +16,6 @@ from project_standards import required_standard_name_list_get
 
 BASELINE_REQUIRED_STANDARD_TUPLE = ("project-foundation", "project-instruction-developer")
 STANDARD_SKILL_ROOT = Path(__file__).resolve().parents[2]
-TASK_ROOT_IGNORE_RULE = "/.spec/"
 
 
 def _args_parse() -> argparse.Namespace:
@@ -114,22 +113,30 @@ def _git_output_get(project_path: Path, argument_list: list[str]) -> str:
 
 
 def _task_root_issue_list_get(project_path: Path) -> list[str]:
-    """Return exact ignored task-root contract issues.
+    """Return ignored task-root contract issues from actual Git behavior.
 
     Args:
         project_path: Canonical project worktree root.
 
     Returns:
-        Missing ignore-rule or tracked-task identifiers.
+        Missing repository ignore behavior or tracked-task identifiers.
+
+    Raises:
+        RuntimeError: If Git cannot evaluate the task-root ignore behavior.
     """
 
     issue_list: list[str] = []
-    gitignore_path = project_path / ".gitignore"
-    gitignore_line_set = (
-        set(gitignore_path.read_text(encoding="utf-8").splitlines()) if gitignore_path.is_file() else set()
+    ignore_result = subprocess.run(
+        ["git", "-C", str(project_path), "check-ignore", "--verbose", "--no-index", ".spec/"],
+        capture_output=True,
+        check=False,
+        text=True,
     )
-    if TASK_ROOT_IGNORE_RULE not in gitignore_line_set:
-        issue_list.append("missing exact /.spec/ ignore rule")
+    if ignore_result.returncode > 1:
+        raise RuntimeError(ignore_result.stderr.strip() or "Git could not evaluate the root .spec ignore behavior.")
+    ignore_source = ignore_result.stdout.partition(":")[0]
+    if ignore_result.returncode != 0 or ignore_source != ".gitignore":
+        issue_list.append("root .spec directory is not ignored by repository .gitignore")
     tracked_task_path_list = _git_output_get(project_path, ["ls-files", ".spec"]).splitlines()
     if tracked_task_path_list:
         issue_list.append(f"tracked .spec paths: {', '.join(tracked_task_path_list)}")

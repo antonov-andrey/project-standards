@@ -9,7 +9,7 @@
 
 ## Mechanical Inventory
 
-- Mechanically verify root `AGENTS.md` presence, the closed baseline selection of `project-foundation` and `project-instruction-developer`, availability of every declared provider, the exact task-root ignore contract, absence of tracked `.spec` artifacts, and duplicate Git common-directory worktrees.
+- Mechanically verify root `AGENTS.md` presence, the closed baseline selection of `project-foundation` and `project-instruction-developer`, availability of every declared provider, actual Git ignore behavior for the root `.spec` directory from the repository's root `.gitignore`, absence of tracked `.spec` artifacts, and duplicate Git common-directory worktrees.
 - Table-of-contents structure, instruction meaning, applicability wording, and semantic completeness are outside the script and MUST be audited semantically.
 - Report these results only as mechanical inventory.
 - Do not inspect imports, filenames, dependencies, manifests, prose tokens, or selected framework examples to infer applicable standards.
