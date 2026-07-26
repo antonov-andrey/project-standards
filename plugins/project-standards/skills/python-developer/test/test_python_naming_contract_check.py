@@ -57,11 +57,13 @@ def test_checker_accepts_canonical_names_and_boundary_dicts(tmp_path: Path) -> N
         (
             '"""Describe the module."""\n\n'
             "from datetime import datetime\n\n"
-            "def is_item_ready(item_list: list[str], payload: dict[str, object], t_create: datetime) -> bool:\n"
+            "def is_item_ready(\n"
+            "    item_list: list[str], payload: dict[str, object], t_create: datetime, t_update_offer_count: datetime\n"
+            ") -> bool:\n"
             '    """Return whether items are ready."""\n'
             "    value_by_key_map: dict[str, str] = {}\n"
             "    seen_set: set[str] = set()\n"
-            "    return bool(item_list or payload or t_create or value_by_key_map or seen_set)\n"
+            "    return bool(item_list or payload or t_create or t_update_offer_count or value_by_key_map or seen_set)\n"
         ),
     )
 

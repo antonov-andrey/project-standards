@@ -409,8 +409,9 @@ def _typed_name_problem_list_get(name: str, annotation_node: ast.AST | None) -> 
     root_name = _annotation_root_name_get(annotation_node)
     annotation_text = ast.unparse(annotation_node) if annotation_node is not None else "untyped"
     problem_list: list[str] = []
-    if _is_temporal_name_match(name) and root_name != "datetime":
-        problem_list.append(f"temporal name {name} must use datetime or datetime | None, not {annotation_text}")
+    if _is_temporal_name_match(name):
+        if root_name != "datetime":
+            problem_list.append(f"temporal name {name} must use datetime or datetime | None, not {annotation_text}")
         return problem_list
     for suffix in NUMERIC_SUFFIX_TUPLE:
         if name.endswith(suffix) and root_name != "int":
