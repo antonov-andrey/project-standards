@@ -1,4 +1,4 @@
-"""Run selected exact provider and Submodule mechanical checks without mutations."""
+"""Run declared exact provider and Submodule mechanical checks without mutations."""
 
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ def _capability_checker_config_list_collect(
     checker_config_list: list[ProjectStandardCheckerConfig],
     execution_error_list: list[ProjectStandardExecutionError],
 ) -> None:
-    """Collect manifests for selected provider capabilities.
+    """Collect manifests for declared provider capabilities.
 
     Args:
         project_root: Exact consumer repository root.

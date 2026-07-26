@@ -1,7 +1,7 @@
 {
   "name": "project-standards",
-  "version": "0.1.0+codex.20260726172114",
-  "description": "Opinionated cross-domain project engineering standards, selection, and audit workflows.",
+  "version": "0.1.0+codex.20260726202941",
+  "description": "Opinionated cross-domain project engineering standards, catalog binding, conditional applicability, and audit workflows.",
   "author": {
     "name": "Andrey Antonov",
     "url": "https://github.com/antonov-andrey"
@@ -25,7 +25,7 @@
       "Write"
     ],
     "defaultPrompt": [
-      "Classify the standards required by this project.",
+      "Classify which declared standards apply to the current project and task.",
       "Audit this project against its required standards.",
       "Apply the relevant project engineering standard."
     ]

@@ -229,12 +229,12 @@ def _runner_run(
     return exit_code, json.loads(output.out)
 
 
-def test_runner_returns_zero_for_one_successful_selected_checker(
+def test_runner_returns_zero_for_one_successful_declared_checker(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """A selected conforming checker returns one deterministic success document.
+    """A declared conforming checker returns one deterministic success document.
 
     Args:
         capsys: Pytest output capture fixture.
@@ -385,7 +385,7 @@ def test_runner_detects_checker_worktree_mutation(
     ]
 
 
-def test_changed_scope_skips_selected_checker_without_applicable_changes(
+def test_changed_scope_skips_declared_checker_without_applicable_changes(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -624,12 +624,12 @@ def test_runner_maps_every_checker_exit_contract_to_execution_error(
     assert payload["mechanical_status"] == "error"
 
 
-def test_runner_ignores_unselected_capability_and_sorts_checkers_and_findings(
+def test_runner_ignores_undeclared_capability_and_sorts_checkers_and_findings(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Selection is canonical and aggregate order is independent of manifest order.
+    """Declaration parsing is canonical and aggregate order is independent of manifest order.
 
     Args:
         capsys: Pytest output capture fixture.
@@ -647,9 +647,9 @@ def test_runner_ignores_unselected_capability_and_sorts_checkers_and_findings(
             "python.alpha": CHECKER_FINDING_UNSORTED_SOURCE,
         },
     )
-    unselected_root = asset_root / "project-foundation"
-    unselected_root.mkdir(parents=True)
-    (unselected_root / "checker.toml").write_text("invalid = true\n", encoding="utf-8")
+    undeclared_root = asset_root / "project-foundation"
+    undeclared_root.mkdir(parents=True)
+    (undeclared_root / "checker.toml").write_text("invalid = true\n", encoding="utf-8")
 
     exit_code, payload = _runner_run(
         capsys,

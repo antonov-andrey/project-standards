@@ -1,4 +1,4 @@
-"""Parse selected project standards from canonical repository instructions."""
+"""Parse declared project standards from canonical repository instructions."""
 
 from __future__ import annotations
 
@@ -71,7 +71,7 @@ def _required_standard_section_line_list_get(text: str) -> list[str]:
 
 
 def required_standard_name_list_get(agents_path: Path) -> list[str]:
-    """Return selected project-standard capability names.
+    """Return declared project-standard capability names.
 
     Args:
         agents_path: Root repository instruction file.

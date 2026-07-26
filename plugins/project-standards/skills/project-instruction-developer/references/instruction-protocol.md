@@ -79,22 +79,23 @@
 
 ## External Standard Reference Rules
 
-- `Required Standards` is the single project-local owner of the external standards selected by one governed `AGENTS.md`.
+- `Required Standards` is the single project-local owner of external provider bindings for one governed `AGENTS.md`.
 - Its canonical machine-readable section heading MUST be exactly `## Required Standards`.
-- Every selection declaration in `Required Standards` MUST be one top-level Markdown bullet beginning with `- `, name each selected provider-qualified skill in inline code, and state its project applicability without copying the skill contract. One bullet MAY group skills that have the same applicability statement.
-- Every governed project MUST declare:
-  - `project-standards:project-foundation` for all project work;
-  - `project-standards:project-instruction-developer` for reading, interpreting, auditing, or changing project instructions.
-- When an existing or newly introduced project entity, technology, boundary, artifact family, or workflow already has an applicable provider standard, the corresponding provider-qualified skill MUST be added to `Required Standards` and applied to that scope in the same change set.
-- Standard applicability MUST be derived from the current project state and task scope; it is a requirement, not an optional selection or recommendation.
-- An applicable provider-qualified skill MAY be omitted, replaced, or declared inapplicable only when an explicit user requirement authorizes that exception.
-- Agent inference, project-local convenience, existing non-compliance, or the absence of a previous `Required Standards` entry MUST NOT create such an exception.
+- Every provider declaration in `Required Standards` MUST be one top-level Markdown bullet beginning with `- ` and name each provider-qualified skill in inline code. One bullet MAY group skills that share one project-local applicability statement.
+- Every governed project MUST declare every exact current `project-standards:*` capability exposed by the installed provider.
+- Declaring the complete `project-standards` catalog binds the project to that provider and MUST NOT be interpreted as a claim that every governed technology or entity already exists in the project.
+- Each declared `project-standards:*` capability applies only when its provider-owned `Use when` trigger matches current project state or task scope; consumer instructions MUST NOT copy that applicability prose or maintain a second selection map.
+- When a new `project-standards:*` capability is added to the provider, every governed project MUST add its exact identity before its mechanical catalog check can pass.
+- When a project introduces an entity already covered by a declared `project-standards:*` capability, that capability applies in the same change without another `Required Standards` edit.
+- Provider-qualified skills outside `project-standards` MUST be added to `Required Standards` when their provider-owned trigger becomes applicable to current or newly introduced project state.
+- Standard applicability MUST be derived from the current project state and task scope; it is a requirement, not an optional recommendation.
+- Agent inference, project-local convenience, existing non-compliance, or the absence of a previous non-`project-standards` provider entry MUST NOT create an applicability exception.
 - If one required provider or skill is unavailable, read-only discovery MAY continue, but project mutation MUST stop until the required owner is available.
 - A project-local rule MAY narrow or specialize an external standard only when an explicit user requirement authorizes that specialization and the rule names the provider-qualified skill, exact external owner, and local scope.
 - One authorized project-local specialization has precedence only inside its declared local scope.
 - An unmarked contradiction between a project-local rule and a required external standard is invalid and MUST block project mutation until the conflict is resolved.
 - Project-local `AGENTS.md` MUST NOT copy, paraphrase, generate, or materialize external standard prose.
-- A `Core Terms` definition owned by a required provider-qualified skill is part of the governed `AGENTS.md` instruction model within that skill's declared applicability scope.
+- A `Core Terms` definition owned by a required provider-qualified skill is part of the governed `AGENTS.md` instruction model within that skill's provider-owned applicability scope.
 - A governed `AGENTS.md` MAY reference such a named term without copying its definition.
 - The provider-owned term block remains the single authoritative and complete definition owner across the governed instruction model.
 - Project-local `Core Terms` MUST contain only project-specific terms that are not already defined by an applicable required standard.

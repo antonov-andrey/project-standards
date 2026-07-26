@@ -26,6 +26,6 @@ One provider path `plugins/<plugin_name>/lib/<owner>/` is a `Self-contained` plu
 - `<skill-root>/checker.toml` identifies only checker scripts owned under that same skill root. It MUST NOT restate semantic rules, consumer-specific exceptions, or project-local paths.
 - Checker implementation, samples, and checker behavior tests remain under the owning skill root. A second skill MUST reference or reuse the real owner instead of copying its checker.
 - Shared checker discovery, scope resolution, process execution, and diagnostic protocol belong to one plugin support owner under `plugins/project-standards/lib/project_standards/`.
-- The shared runner discovers checker manifests only for capabilities already selected by the consumer's `Required Standards`; checker discovery MUST NOT create a second standard-selection map.
+- The shared runner discovers checker manifests only for capabilities declared by the consumer's complete `Required Standards` catalog; checker discovery MUST NOT create a second applicability map.
 - Exact manifest schema, scope strategies, process transport, diagnostics, and failure semantics are owned by root `DESIGN.md`, section `Манифест И Протокол Процесса`.
 - Mechanical checker output MUST identify itself as mechanical evidence. Mechanical success does not prove semantic conformance and MUST NOT replace, narrow, seed, or close an applicable semantic audit.

@@ -14,7 +14,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "lib"))
 
 from project_standards import required_standard_name_list_get
 
-BASELINE_REQUIRED_STANDARD_TUPLE = ("project-foundation", "project-instruction-developer")
 STANDARD_SKILL_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -60,10 +59,10 @@ def main() -> int:
 class ProjectReport(TypedDict):
     """Store exact mechanical metadata for one discovered project."""
 
-    baseline_missing_project_standard_list: list[str]
     declared_project_standard_list: list[str]
     git_common_dir: Path
     mechanical_status: str
+    missing_project_standard_list: list[str]
     missing_root_instruction_list: list[str]
     path: Path
     task_root_issue_list: list[str]
@@ -186,14 +185,12 @@ class ProjectStandardInventory:
 
         agents_path = project_path / "AGENTS.md"
         declared_project_standard_list = required_standard_name_list_get(agents_path)
-        baseline_missing_project_standard_list = sorted(
-            set(BASELINE_REQUIRED_STANDARD_TUPLE) - set(declared_project_standard_list)
-        )
+        missing_project_standard_list = sorted(self._available_standard_set - set(declared_project_standard_list))
         missing_root_instruction_list = _missing_root_instruction_list_get(agents_path)
         task_root_issue_list = _task_root_issue_list_get(project_path)
         unavailable_project_standard_list = sorted(set(declared_project_standard_list) - self._available_standard_set)
         if (
-            baseline_missing_project_standard_list
+            missing_project_standard_list
             or missing_root_instruction_list
             or task_root_issue_list
             or unavailable_project_standard_list
@@ -202,12 +199,12 @@ class ProjectStandardInventory:
         else:
             mechanical_status = "clean"
         return ProjectReport(
-            baseline_missing_project_standard_list=baseline_missing_project_standard_list,
             declared_project_standard_list=declared_project_standard_list,
             git_common_dir=Path(
                 _git_output_get(project_path, ["rev-parse", "--path-format=absolute", "--git-common-dir"])
             ).resolve(),
             mechanical_status=mechanical_status,
+            missing_project_standard_list=missing_project_standard_list,
             missing_root_instruction_list=missing_root_instruction_list,
             path=project_path,
             task_root_issue_list=task_root_issue_list,
@@ -224,16 +221,15 @@ class ProjectStandardInventory:
         print(
             json.dumps(
                 {
+                    "available_project_standard_list": sorted(self._available_standard_set),
                     "duplicate_git_common_dir_list": workspace_report["duplicate_git_common_dir_list"],
                     "mechanical_status": workspace_report["mechanical_status"],
                     "project_list": [
                         {
-                            "baseline_missing_project_standard_list": project_report[
-                                "baseline_missing_project_standard_list"
-                            ],
                             "declared_project_standard_list": project_report["declared_project_standard_list"],
                             "git_common_dir": str(project_report["git_common_dir"]),
                             "mechanical_status": project_report["mechanical_status"],
+                            "missing_project_standard_list": project_report["missing_project_standard_list"],
                             "missing_root_instruction_list": project_report["missing_root_instruction_list"],
                             "path": str(project_report["path"]),
                             "semantic_audit_required": True,

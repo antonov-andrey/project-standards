@@ -34,7 +34,7 @@
 - `pytest --ignore=test/code -q` is the ordinary repository handoff suite for code, tests, runtime behavior, and database behavior when no narrower owner defines another ordinary suite.
 - Targeted verification and executable standard checks do not replace the ordinary handoff suite.
 - `test/code/**` is not part of the ordinary handoff suite and runs only when the task changes that local contract or helper, the user explicitly requests it, or a narrower workflow gate requires it.
-- `project-standard-check --project-root <repository-root> --scope changed` is separate from pytest and runs when changed scope is governed by selected mechanically enforced standards. Its clean result is mechanical evidence only and never a semantic verdict.
+- `project-standard-check --project-root <repository-root> --scope changed` is separate from pytest and runs the declared mechanically enforced standards against their exact scopes. Its clean result is mechanical evidence only and never a semantic verdict.
 - Provider checker tests verify checker success, finding, critical edge, scope, and diagnostic behavior in the provider repository; they do not scan a consumer repository as their own test fixture.
 
 ## Test Import And Support Artifact Contract

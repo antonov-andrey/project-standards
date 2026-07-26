@@ -9,11 +9,28 @@
 
 ## Required Standards
 
-- `project-standards:project-foundation` applies to all work in this repository.
-- `project-standards:project-instruction-developer` applies to instruction artifacts.
-- `project-standards:project-documentation-developer` applies to `DESIGN.md` and maintained documentation.
-- `project-standards:python-developer`, `project-standards:python-cli-developer`, and `project-standards:pytest-developer` apply to provider tooling and tests.
-- `project-standards:runtime-config-developer` applies to environment-backed provider tooling configuration.
+- `project-standards:aws-cloudformation-developer`
+- `project-standards:docker-compose-developer`
+- `project-standards:http-api-client-developer`
+- `project-standards:kubernetes-developer`
+- `project-standards:legacy-python-maintainer`
+- `project-standards:project-documentation-developer`
+- `project-standards:project-foundation`
+- `project-standards:project-instruction-developer`
+- `project-standards:project-standard-audit`
+- `project-standards:project-standardize`
+- `project-standards:pytest-developer`
+- `project-standards:python-cli-developer`
+- `project-standards:python-developer`
+- `project-standards:python-logging-developer`
+- `project-standards:python-retry-developer`
+- `project-standards:react-ui-developer`
+- `project-standards:rest-api-server-developer`
+- `project-standards:runtime-config-developer`
+- `project-standards:sqlalchemy-developer`
+- `project-standards:submodule-developer`
+- `project-standards:typescript-developer`
+- `project-standards:zitadel-developer`
 
 If one required provider skill is unavailable, continue read-only discovery only and do not mutate this repository until the provider is restored.
 
@@ -26,7 +43,7 @@ If one required provider skill is unavailable, continue read-only discovery only
 - Shared contracts have exactly one owning reference and dependent skills cite that owner instead of copying it.
 - Only independently normative closed predicates with complete deterministic implementations qualify as mechanically enforceable checks. They live with the standard's owning skill; one shared runner only discovers and executes them and MUST NOT become a second semantic owner.
 - Heuristic signals, selected example lists, semantic inference, and false-positive allowlists are forbidden in executable standard checkers. Requirements that cannot be decided completely stay under mandatory semantic audit.
-- Consumer projects select applicable skills through their `AGENTS.md` section `Required Standards`; consumer-local generated or copied standard prose is forbidden.
+- Consumer projects declare the complete exact `project-standards` provider catalog through their `AGENTS.md` section `Required Standards`; each declared skill applies only when its provider-owned trigger matches current project state or task scope, and consumer-local generated or copied standard prose is forbidden.
 - Domain-specific agent workflows and generic task orchestration do not belong in this repository.
 - Task pairs live only under the ignored `.spec/` root, remain untracked, and MUST NOT be deleted unless the user explicitly requests their deletion.
 
