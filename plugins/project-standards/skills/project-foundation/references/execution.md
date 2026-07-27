@@ -8,6 +8,9 @@
 
 ## Honest Execution Rules
 
+- VCS dependency revision contract:
+  - Declare a VCS dependency without a commit, tag, or branch revision suffix by default.
+  - Add or retain an explicit VCS revision only when the user has expressly authorized that pin.
 - Claim verification contract:
   - Treat every factual claim about code, behavior, status, completion, verification, or repository state as unverified until it is checked against the current repository state.
   - If current evidence is missing, report the claim explicitly as an assumption instead of a fact.
