@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tomllib
 import zipfile
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -24,9 +25,13 @@ def _checker_asset_source_by_archive_path_map_get() -> dict[str, Path]:
     for manifest_path in sorted(skill_root.glob("*/checker.toml")):
         owner_root = manifest_path.parent
         archive_root = Path("project_standards") / "checker_assets" / owner_root.name
-        for source_path in [manifest_path, *sorted((owner_root / "scripts").rglob("*"))]:
-            if not source_path.is_file() or "__pycache__" in source_path.parts:
-                continue
+        manifest = tomllib.loads(manifest_path.read_text(encoding="utf-8"))
+        source_path_list = [
+            manifest_path,
+            *(owner_root / check["script_path"] for check in manifest["check_list"]),
+        ]
+        for source_path in source_path_list:
+            assert source_path.is_file()
             archive_path = (archive_root / source_path.relative_to(owner_root)).as_posix()
             assert archive_path not in source_by_archive_path_map
             source_by_archive_path_map[archive_path] = source_path

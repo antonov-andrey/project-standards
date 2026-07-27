@@ -1,6 +1,6 @@
 ---
 name: python-cli-developer
-description: Develop executable Python scripts, CLI parsers, environment-backed flags, secret inputs, root entrypoints, and test modes.
+description: Develop Python scripts and CLIs, environment-backed flags, secret inputs, entrypoints, and test modes.
 ---
 
 # Python CLI Developer

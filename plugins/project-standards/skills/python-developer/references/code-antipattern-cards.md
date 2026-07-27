@@ -1,5 +1,33 @@
 # Code Antipattern Audit Semantic Cards
 
+## Table Of Contents
+
+- [Book Anti-Pattern Cards (General)](#book-anti-pattern-cards-general)
+  - [BOOK-01 The Blob](#book-01-the-blob)
+  - [BOOK-02 Spaghetti Code](#book-02-spaghetti-code)
+  - [BOOK-03 Cut-and-Paste Programming](#book-03-cut-and-paste-programming)
+  - [BOOK-04 Lava Flow](#book-04-lava-flow)
+  - [BOOK-05 Functional Decomposition (OO context)](#book-05-functional-decomposition-oo-context)
+  - [BOOK-06 Poltergeists](#book-06-poltergeists)
+- [Opinionated Project Anti-Pattern Cards](#opinionated-project-anti-pattern-cards)
+  - [PRJ-01 God Composition Root](#prj-01-god-composition-root)
+  - [PRJ-02 Domain Modules Import Infrastructure Libraries](#prj-02-domain-modules-import-infrastructure-libraries)
+  - [PRJ-03 Hidden Dependency Construction Inside Orchestration Classes](#prj-03-hidden-dependency-construction-inside-orchestration-classes)
+  - [PRJ-04 Service Locator / Dynamic Wiring Hacks](#prj-04-service-locator--dynamic-wiring-hacks)
+  - [PRJ-05 Cross-Script Imports for New Business Logic Reuse](#prj-05-cross-script-imports-for-new-business-logic-reuse)
+  - [PRJ-06 Ceremonial Layering Without Concrete Problem](#prj-06-ceremonial-layering-without-concrete-problem)
+  - [PRJ-07 Copy-Pasted Helper Logic Across Modules/Classes](#prj-07-copy-pasted-helper-logic-across-modulesclasses)
+  - [PRJ-08 Argument-Pack / Pseudo-Method Helpers](#prj-08-argument-pack--pseudo-method-helpers)
+  - [PRJ-09 Loop-Invariant Work Inside Per-Item Loops](#prj-09-loop-invariant-work-inside-per-item-loops)
+  - [PRJ-10 Pass-through Proxy Methods](#prj-10-pass-through-proxy-methods)
+  - [PRJ-11 Anemic Entity Model / Transaction Script](#prj-11-anemic-entity-model--transaction-script)
+  - [PRJ-12 Ceremonial Ports / Interface-For-One-Class](#prj-12-ceremonial-ports--interface-for-one-class)
+  - [PRJ-13 DTO Conveyor Belt](#prj-13-dto-conveyor-belt)
+  - [PRJ-14 Generic Bucket Modules / Stage-Named Structure](#prj-14-generic-bucket-modules--stage-named-structure)
+  - [PRJ-15 Single-Use Artifacts Without Stable Ownership](#prj-15-single-use-artifacts-without-stable-ownership)
+  - [PRJ-16 Overloaded Control Flow Without Cohesive Owner](#prj-16-overloaded-control-flow-without-cohesive-owner)
+  - [PRJ-17 Dependency Fan-Out Beyond Owner Role](#prj-17-dependency-fan-out-beyond-owner-role)
+
 ## Book Anti-Pattern Cards (General)
 
 ### BOOK-01 The Blob

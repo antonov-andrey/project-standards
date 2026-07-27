@@ -96,7 +96,7 @@
     {
       "id": "overlap-product-api-persistence-client",
       "working_directory": "..",
-      "prompt": "Design a ZITADEL-authenticated Product API endpoint that persists a SQLAlchemy row and then invokes an idempotent outbound HTTP provider with bounded retries. Include the tests needed, but do not implement it.",
+      "prompt": "Design a ZITADEL-authenticated Product API endpoint that persists a SQLAlchemy row and then invokes an idempotent outbound HTTP provider with bounded retries. Include tests for authorization and generated OpenAPI, transaction behavior, provider error classification, and retry edge cases, but do not implement it.",
       "expected_skill_list": [
         "project-standards:project-foundation",
         "project-standards:rest-api-server-developer",
@@ -133,7 +133,6 @@
         "project-standards:project-standard-audit"
       ],
       "forbidden_skill_list": [
-        "project-standards:project-standardize",
         "agent-workflows:instruction-migration"
       ],
       "semantic_invariant_list": [
@@ -144,6 +143,110 @@
         {
           "id": "read-only",
           "text": "The response does not turn the audit into an automatic instruction migration or repository mutation."
+        }
+      ]
+    },
+    {
+      "id": "indirect-docker-compose",
+      "working_directory": "../../compose-mysql",
+      "prompt": "Change the Compose service to use a pinned image, persistent named storage, a real readiness health check, explicit resource bounds, and safe exact cleanup. Give the implementation and verification contract without changing files.",
+      "expected_skill_list": [
+        "project-standards:project-foundation",
+        "project-standards:docker-compose-developer"
+      ],
+      "forbidden_skill_list": [
+        "project-standards:kubernetes-developer",
+        "project-standards:aws-cloudformation-developer"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "compose-boundaries",
+          "text": "The response covers image identity, persistent state, readiness, resource bounds, rendered Compose validation, and exact artifact cleanup without treating startup order as readiness."
+        }
+      ]
+    },
+    {
+      "id": "indirect-kubernetes",
+      "working_directory": "../../workflow-control-center",
+      "prompt": "Add a restart-resumable one-off Kubernetes Job with explicit service account, requests and limits, runtime Secret use, retained failure evidence, readiness-dependent completion, and cleanup after success. Give the required implementation and live verification boundaries without changing files.",
+      "expected_skill_list": [
+        "project-standards:project-foundation",
+        "project-standards:kubernetes-developer"
+      ],
+      "forbidden_skill_list": [
+        "project-standards:docker-compose-developer",
+        "project-standards:aws-cloudformation-developer"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "job-lifecycle",
+          "text": "The response makes workload identity, resources, secrets, restartability, failure observability, successful cleanup, manifest validation, and live verification explicit."
+        }
+      ]
+    },
+    {
+      "id": "indirect-legacy-python",
+      "working_directory": "../../scrapy-next-deprecated",
+      "prompt": "Fix a contained bug inside an existing Python root classified as Legacy, preserving its current owner boundary and behavior. Do not migrate or modernize its repository structure. Explain the scoped approach without changing files.",
+      "expected_skill_list": [
+        "project-standards:project-foundation",
+        "project-standards:legacy-python-maintainer"
+      ],
+      "forbidden_skill_list": [
+        "project-standards:python-developer",
+        "agent-workflows:instruction-migration"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "legacy-containment",
+          "text": "The response keeps the fix inside the existing Legacy owner and does not turn maintenance into an unrequested structural migration."
+        }
+      ]
+    },
+    {
+      "id": "overlap-python-cli-config-logging",
+      "working_directory": "../../workflow-control-center",
+      "prompt": "Add a directly executable Python CLI that reads ordinary options from generated environment bindings, keeps a secret environment-only, loads dotenv once from the explicit project root, initializes shared logging once without creating or injecting logger objects, exposes --help through normal startup, and has a bounded --test mode. Give the implementation and verification contract without changing files.",
+      "expected_skill_list": [
+        "project-standards:project-foundation",
+        "project-standards:python-developer",
+        "project-standards:python-cli-developer",
+        "project-standards:runtime-config-developer",
+        "project-standards:python-logging-developer"
+      ],
+      "forbidden_skill_list": [
+        "project-standards:legacy-python-maintainer",
+        "project-standards:docker-compose-developer"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "cli-config-secret",
+          "text": "The response requires direct normal --help startup, canonical environment binding, explicit-root one-time dotenv loading, environment-only secret handling, and consistent bounded test-mode propagation."
+        },
+        {
+          "id": "logging-owner",
+          "text": "The response initializes shared logging exactly once at root bootstrap and does not create or inject logger objects."
+        }
+      ]
+    },
+    {
+      "id": "negative-explicit-audits",
+      "working_directory": "..",
+      "prompt": "Read the current skill descriptions and summarize which engineering areas they cover. Do not run an audit workflow, produce a report artifact, or change files.",
+      "expected_skill_list": [
+        "project-standards:project-foundation",
+        "project-standards:project-instruction-developer"
+      ],
+      "forbidden_skill_list": [
+        "agent-workflows:code-audit",
+        "agent-workflows:code-antipattern-audit",
+        "agent-workflows:instruction-audit",
+        "agent-workflows:instruction-migration"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "no-explicit-workflow",
+          "text": "The response inspects and summarizes descriptions without activating any explicit-only audit or migration workflow."
         }
       ]
     }

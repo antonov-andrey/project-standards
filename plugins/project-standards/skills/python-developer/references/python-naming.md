@@ -1,5 +1,13 @@
 # Python Naming Contract
 
+## Table Of Contents
+
+- [Applicability](#applicability)
+- [Public Naming Structure And Reuse](#public-naming-structure-and-reuse)
+- [Script Filename Rules](#script-filename-rules)
+- [Function And Method Naming](#function-and-method-naming)
+- [Cross-Layer And Public Model Naming](#cross-layer-and-public-model-naming)
+
 ## Applicability
 
 These rules extend identifiers whose defining declarations live in non-`Legacy`, non-test Python code.

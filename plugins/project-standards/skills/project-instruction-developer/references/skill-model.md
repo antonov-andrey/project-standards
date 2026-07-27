@@ -13,8 +13,11 @@
 
 - `agents/openai.yaml` exists only when one skill needs meaningful UI metadata, tool dependencies, or invocation policy.
 - Generic display names copied from a skill identifier and generic descriptions such as `Help with ... tasks` are forbidden.
+- `interface.default_prompt`, when present, MUST contain the exact `$<skill-name>` invocation.
+- `interface.short_description`, when present, MUST contain from 25 through 64 characters.
 - A skill that must be explicitly invoked sets `policy.allow_implicit_invocation: false`; prose alone does not implement that policy.
 - `policy.allow_implicit_invocation: true` is the default and MUST NOT be written without another meaningful metadata field that justifies the file.
+- The owner-local metadata checker validates only YAML readability, the exact default-prompt invocation, and the closed short-description length range. Whether metadata is meaningful, current, necessary, or semantically accurate remains a semantic review obligation.
 
 ## Behavioral Evaluation
 

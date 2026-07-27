@@ -1,6 +1,6 @@
 ---
 name: rest-api-server-developer
-description: Use when adding or changing inbound HTTP routes, OpenAPI metadata, request or response schemas, authorization, access control, validation, or server-side API boundaries.
+description: Develop inbound HTTP routes, OpenAPI, schemas, authorization, access control, validation, and server boundaries.
 ---
 
 # REST API Server Developer

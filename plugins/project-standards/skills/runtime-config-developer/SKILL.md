@@ -1,6 +1,6 @@
 ---
 name: runtime-config-developer
-description: Use when a project reads environment values, loads dotenv files, defines runtime configuration objects, establishes configuration precedence, or transports secrets.
+description: Develop environment loading, runtime configuration, precedence, dotenv handling, or secret transport.
 ---
 
 # Runtime Config Developer

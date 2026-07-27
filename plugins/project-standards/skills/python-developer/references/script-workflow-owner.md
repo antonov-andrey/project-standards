@@ -43,6 +43,3 @@ Do not use this pattern for one simple operation with no meaningful stage split,
 - Are persisted side effects and transaction boundaries owned by visible runtime participants?
 - Are names chosen from nearby non-`Legacy` project analogies instead of copied from legacy helper layering?
 - If one stage has child stages, are their order, handoffs, and ownership clear without creating a second workflow owner?
-
-- `references/script-workflow-owner.md` owns the reusable implementation pattern for one bounded runtime algorithm split into ordered stages.
-- Apply that pattern when non-`Legacy` project code implements a bounded algorithm with two or more ordered stages and its correctness depends on the applicability conditions declared by this reference.

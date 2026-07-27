@@ -1,6 +1,6 @@
 ---
 name: typescript-developer
-description: Use when writing, refactoring, reviewing, or configuring TypeScript code, generated clients, frontend state, validation, or build and test boundaries.
+description: Develop, refactor, review, or configure TypeScript, generated clients, frontend state, validation, build, or tests.
 ---
 
 # TypeScript Developer

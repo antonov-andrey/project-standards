@@ -1,0 +1,17 @@
+schema_version = 1
+owner = "project-standards:project-instruction-developer"
+
+[[check_list]]
+id = "project-instruction-developer.skill-openai-metadata"
+script_path = "scripts/skill_metadata_check.py"
+scope_strategy = "full-on-change"
+path_include_glob_list = [
+    ".agents/skills/*/agents/openai.yaml",
+    "plugins/*/skills/*/agents/openai.yaml",
+]
+trigger_path_include_glob_list = [
+    ".agents/skills/*/SKILL.md",
+    ".agents/skills/*/agents/openai.yaml",
+    "plugins/*/skills/*/SKILL.md",
+    "plugins/*/skills/*/agents/openai.yaml",
+]

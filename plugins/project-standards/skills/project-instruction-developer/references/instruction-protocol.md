@@ -1,5 +1,21 @@
 # Instruction Protocol
 
+## Table Of Contents
+
+- [Instruction Protocol Terms](#instruction-protocol-terms)
+- [Section Placement Rules](#section-placement-rules)
+- [Cross-Definition Rules](#cross-definition-rules)
+- [Core Terms Rules](#core-terms-rules)
+- [Key Directory Map Rules](#key-directory-map-rules)
+- [Allowed Dependency Matrix Rules](#allowed-dependency-matrix-rules)
+- [Repository-wide Definition Rules](#repository-wide-definition-rules)
+- [Main Project AGENTS.md Structure Rules](#main-project-agentsmd-structure-rules)
+- [External Standard Reference Rules](#external-standard-reference-rules)
+- [Domain Plugin Ownership Rules](#domain-plugin-ownership-rules)
+- [Main project AGENTS.md](#main-project-agentsmd)
+- [Submodule AGENTS.md](#submodule-agentsmd)
+- [External Path Reference Rules](#external-path-reference-rules)
+
 ### Instruction Protocol Terms
 - `Explicit entity-local specialization` means an owner-local slice of a named term whose allowed relationships are stated separately from the parent term in `Allowed Dependency Matrix`.
 - `Repository-wide definition rule` means a standalone top-level repository-wide rule family that extends one named `Core Term` beyond its core definition.

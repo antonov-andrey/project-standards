@@ -1,5 +1,18 @@
 # REST API Server Contract
 
+## Table Of Contents
+
+- [Placement And Registration](#placement-and-registration)
+- [Standard Resource Mechanics](#standard-resource-mechanics)
+- [Access And ZITADEL Delegation](#access-and-zitadel-delegation)
+- [OpenAPI, Schemas, And Errors](#openapi-schemas-and-errors)
+- [Sessions And Infrastructure Isolation](#sessions-and-infrastructure-isolation)
+- [Capabilities](#capabilities)
+- [Request Audit And Correlation](#request-audit-and-correlation)
+- [Secret Responses](#secret-responses)
+- [Extension](#extension)
+- [Verification](#verification)
+
 ## Placement And Registration
 
 - Concrete route modules, route-local request and response schemas, and route-local helpers live under `backend/api/**`.

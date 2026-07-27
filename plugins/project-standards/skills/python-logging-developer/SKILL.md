@@ -1,6 +1,6 @@
 ---
 name: python-logging-developer
-description: Use when a project configures, writes, parses, rotates, or transports Python logging records, or when one changed runtime adds a Python logging bootstrap.
+description: Develop Python logging configuration, records, parsing, rotation, transport, or runtime bootstrap.
 ---
 
 # Python Logging Developer

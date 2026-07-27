@@ -1,6 +1,6 @@
 ---
 name: project-documentation-developer
-description: Use when creating, moving, classifying, reviewing, or changing DESIGN.md, design documents, maintained docs, script catalogs, or task-document boundaries.
+description: Create, change, classify, move, or review DESIGN.md, design docs, maintained docs, script catalogs, or task boundaries.
 ---
 
 # Project Documentation Developer

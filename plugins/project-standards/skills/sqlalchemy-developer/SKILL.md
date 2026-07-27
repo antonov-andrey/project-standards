@@ -1,10 +1,14 @@
 ---
 name: sqlalchemy-developer
-description: Use when changing SQLAlchemy models, persisted fields, engines, sessions, transactions, database bootstrap, migrations, table lifecycle, or test database behavior.
+description: Develop SQLAlchemy models, fields, engines, sessions, transactions, bootstrap, migrations, lifecycle, or test databases.
 ---
 
 # SQLAlchemy Developer
 
-Read `references/model-sqlalchemy.md` and `references/sqlalchemy.md` completely. Apply `project-foundation/references/temporal-data.md` to every temporal field.
+Read `references/model-sqlalchemy.md` and `references/orm.md` when ORM ownership, models, mapped fields, relationships, or queries are in scope.
+
+Read `references/session-transaction.md` when engines, bootstrap, sessions, production writes, or transaction ownership are in scope. Read `references/migration.md` for schema migrations or schema-affecting renames. Read `references/table-lifecycle.md` when selecting or changing a table lifecycle. Read `references/test-database.md` for `_test` DB seeding.
+
+Apply `project-foundation/references/temporal-data.md` to every temporal field.
 
 Use ORM-first behavior, explicit session and transaction ownership, canonical provider APIs, and final-state migrations. Analyze every engine and session call site before refactoring; mechanical replacement is forbidden.

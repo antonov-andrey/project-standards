@@ -1,5 +1,22 @@
 # Python Core Contract
 
+## Table Of Contents
+
+- [Applicability](#applicability)
+- [General Code Rules](#general-code-rules)
+- [Formatting And Docstring Rules](#formatting-and-docstring-rules)
+- [Multiline String Placement Contract](#multiline-string-placement-contract)
+- [Method Binding Contract](#method-binding-contract)
+- [Signature Type Contract](#signature-type-contract)
+- [Import Form Contract](#import-form-contract)
+- [Validated Object Contract](#validated-object-contract)
+- [Class Necessity Contract](#class-necessity-contract)
+- [Architecture Defaults](#architecture-defaults)
+- [Structure And Logic Placement Defaults](#structure-and-logic-placement-defaults)
+- [Helper Artifact Restrictions](#helper-artifact-restrictions)
+- [Top-Level Run-Flow Ownership](#top-level-run-flow-ownership)
+- [Python File Layout Contract](#python-file-layout-contract)
+
 ## Applicability
 
 - Unless one narrower code section explicitly says otherwise, these rules apply only to non-`Legacy` code.

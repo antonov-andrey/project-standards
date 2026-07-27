@@ -1,6 +1,6 @@
 ---
 name: zitadel-developer
-description: Develop ZITADEL deployment, OIDC, token validation, direct identity clients, account switching, delegation, telemetry, and persistence.
+description: Develop ZITADEL deployment, OIDC, tokens, identity clients, account switching, delegation, telemetry, or persistence.
 ---
 
 # ZITADEL Developer

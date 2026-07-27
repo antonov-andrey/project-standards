@@ -1,6 +1,6 @@
 ---
 name: react-ui-developer
-description: Develop or review React views through shared declarative form, table, layout, route, theme, account-preference, and error-boundary contracts.
+description: Develop or review React views using shared form, table, layout, route, theme, account preference, and error-boundary contracts.
 ---
 
 # React UI Developer

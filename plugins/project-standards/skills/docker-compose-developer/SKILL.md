@@ -1,6 +1,6 @@
 ---
 name: docker-compose-developer
-description: Use when adding or changing Dockerfiles, Compose services, images, containers, networks, volumes, health checks, environment wiring, or local container lifecycle.
+description: Develop Dockerfiles or Compose services, images, containers, networks, volumes, health checks, environment wiring, and local lifecycle.
 ---
 
 # Docker Compose Developer

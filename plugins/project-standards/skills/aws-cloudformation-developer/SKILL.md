@@ -1,6 +1,6 @@
 ---
 name: aws-cloudformation-developer
-description: Use when adding or changing AWS CloudFormation stacks, IAM, S3, Glue, Athena, Lake Formation, KMS, account boundaries, cost controls, or deployment change sets.
+description: Develop CloudFormation, IAM, S3, Glue, Athena, Lake Formation, KMS, account isolation, cost controls, or deployment changes.
 ---
 
 # AWS CloudFormation Developer

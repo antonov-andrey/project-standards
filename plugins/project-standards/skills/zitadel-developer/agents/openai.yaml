@@ -1,4 +1,0 @@
-interface:
-  display_name: "ZITADEL Developer"
-  short_description: "Build secure reusable ZITADEL integrations."
-  default_prompt: "Use $zitadel-developer to implement a secure ZITADEL identity boundary."

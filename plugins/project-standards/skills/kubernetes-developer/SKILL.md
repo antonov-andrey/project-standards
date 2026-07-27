@@ -1,6 +1,6 @@
 ---
 name: kubernetes-developer
-description: Use when adding or changing Kubernetes workloads, Jobs, Services, storage, Secrets, resource limits, lifecycle controllers, rollout behavior, or cluster verification.
+description: Develop Kubernetes workloads, Jobs, Services, storage, Secrets, resources, lifecycle, rollouts, or cluster checks.
 ---
 
 # Kubernetes Developer

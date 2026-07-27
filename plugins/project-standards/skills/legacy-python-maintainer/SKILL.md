@@ -1,6 +1,6 @@
 ---
 name: legacy-python-maintainer
-description: Use when fixing, containing, deleting, or assessing Python code classified as Legacy without an explicitly requested migration into the modern project model.
+description: Fix, contain, delete, or assess Legacy Python without migrating it into the modern project model.
 ---
 
 # Legacy Python Maintainer

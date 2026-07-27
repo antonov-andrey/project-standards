@@ -1,6 +1,6 @@
 ---
 name: http-api-client-developer
-description: Use when code adds or changes an outbound HTTP integration, API client, endpoint mapping, external schema, provider error handling, rate limiting, or endpoint retry semantics.
+description: Develop outbound HTTP clients, endpoint mappings, schemas, provider errors, rate limits, and retry semantics.
 ---
 
 # HTTP API Client Developer

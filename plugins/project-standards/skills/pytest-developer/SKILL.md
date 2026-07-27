@@ -1,6 +1,6 @@
 ---
 name: pytest-developer
-description: Use when adding, changing, moving, running, or reviewing Python tests, fixtures, pytest configuration, behavior coverage, or code-contract checks.
+description: Develop, move, run, or review Python tests, fixtures, pytest config, behavior coverage, and contract checks.
 ---
 
 # Pytest Developer

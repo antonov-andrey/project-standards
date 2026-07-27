@@ -1,6 +1,6 @@
 ---
 name: project-foundation
-description: Use when working in any governed project or when repository ownership, execution integrity, reporting, temporal data, or harness configuration affects the task.
+description: Use for every task in a governed repository; owns ownership, execution integrity, reporting, UTC data, and harness configuration.
 ---
 
 # Project Foundation

@@ -7,6 +7,7 @@ dependencies = [
     "black>=26.5.1,<27",
     "pathspec>=0.12.1,<2",
     "pytest>=9,<10",
+    "PyYAML>=6.0.3,<7",
 ]
 description = "Development and test tooling for provider-owned project standards"
 name = "project-standards"
@@ -21,7 +22,9 @@ packages = ["plugins/project-standards/lib/project_standards"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "plugins/project-standards/skills/project-foundation/checker.toml" = "project_standards/checker_assets/project-foundation/checker.toml"
-"plugins/project-standards/skills/project-foundation/scripts" = "project_standards/checker_assets/project-foundation/scripts"
+"plugins/project-standards/skills/project-foundation/scripts/repository_shell_script_check.py" = "project_standards/checker_assets/project-foundation/scripts/repository_shell_script_check.py"
+"plugins/project-standards/skills/project-instruction-developer/checker.toml" = "project_standards/checker_assets/project-instruction-developer/checker.toml"
+"plugins/project-standards/skills/project-instruction-developer/scripts/skill_metadata_check.py" = "project_standards/checker_assets/project-instruction-developer/scripts/skill_metadata_check.py"
 
 [tool.pytest.ini_options]
 addopts = "-p project_standards.pytest_plugin"

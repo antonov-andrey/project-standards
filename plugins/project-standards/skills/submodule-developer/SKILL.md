@@ -1,6 +1,6 @@
 ---
 name: submodule-developer
-description: Use when adding, changing, consuming, publishing, renaming, removing, or documenting a Git submodule or its reusable provider contract.
+description: Add, change, consume, publish, rename, remove, or document Git submodules and provider contracts.
 ---
 
 # Submodule Developer

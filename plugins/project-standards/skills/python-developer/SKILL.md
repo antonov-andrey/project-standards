@@ -1,6 +1,6 @@
 ---
 name: python-developer
-description: Use when writing, refactoring, reviewing, or structurally changing non-Legacy Python code, packages, models, functions, classes, imports, naming, or runtime algorithms.
+description: Develop, refactor, or review non-Legacy Python code, including scripts, modules, models, functions, classes, imports, naming, and runtime algorithms.
 ---
 
 # Python Developer
@@ -14,6 +14,8 @@ Read these references completely:
 - `references/python-ownership.md`.
 
 Read `references/script-workflow-owner.md` when a bounded algorithm has two or more ordered stages and correctness depends on their handoff or order.
+
+Read `references/code-antipattern-cards.md` only when performing a semantic anti-pattern audit or fixing findings classified by those cards.
 
 Apply `project-foundation` and the more specific capability for CLI, logging, retry, tests, SQLAlchemy, runtime configuration, or HTTP boundaries when those concerns are present.
 
