@@ -7,4 +7,4 @@ description: Develop Python logging configuration, records, parsing, rotation, t
 
 Read `references/logging.md` completely.
 
-Use `config_logging/DESIGN.md` as the provider contract when the submodule is present. Initialize standard logging once at root bootstrap, then use direct `import logging` calls without logger objects, hidden configuration, or unrelated artifact ownership.
+Use `config_logging/DESIGN.md` as the provider contract when the submodule is present. Initialize standard logging once at root bootstrap, then call the imported `logging` module directly. Do not create or inject logger objects, hide configuration, or take ownership of unrelated artifacts.
