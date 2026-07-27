@@ -1,10 +1,5 @@
 # Project Standard Audit
 
-- Confirm repository discovery is complete for the explicit workspace root.
-- Keep the mechanical and semantic phases separate:
-  - run `project-standard-audit/scripts/workspace_inventory.py --workspace-root <workspace-root> --check` for repository discovery, root-instruction presence, exact equality between the declared and available `project-standards:*` catalogs, task-root ignore state, and duplicate-worktree evidence;
-  - run `project-standard-check --project-root <repository-root> --scope all` for exact provider and Submodule mechanical predicates;
-  - do not interpret either successful command as semantic coverage or conformance.
 - Derive semantic scope independently from every current canonical owner, not from checker inventory, checker output, previously noticed concerns, historical findings, or the implementation plan.
 - Compare actual project entities and boundaries with the provider-owned triggers of capabilities declared in `Required Standards`.
 - Treat every missing applicable capability from another provider as a finding unless an explicit user-authorized exception is present.
@@ -13,10 +8,7 @@
 - Record one semantic verdict and current evidence for every applicable requirement. Record one explicit reason for every not-applicable requirement. Missing coverage is itself a finding.
 - Confirm project-local prose contains concrete paths, runtime versions, commands, side effects, security, verification, and authorized specializations rather than copied provider prose.
 - Confirm reusable generic skills and agent support assets exist only in their provider.
-- Confirm stable design, maintained docs, and task pairs use their canonical owners.
-- Confirm the repository's root `.gitignore` actually ignores the root `.spec` directory, no file under `.spec/` is tracked, and no task pair is classified as stale or deleted because its task completed or was abandoned. Do not require one particular equivalent Git ignore pattern.
+- Confirm stable design and maintained docs use their canonical owners.
 - Confirm no compatibility document, duplicate harness default, or hidden secondary checkout remains active.
 - For protected instruction migrations, validate the complete approved source-to-target ledger in addition to the final semantic model.
-- Run the declared provider and Submodule mechanical checkers for the full project scope and treat every finding or checker execution error as mechanical evidence.
-- Mechanical check success does not replace, narrow, seed, or close semantic review.
 - When fixes are authorized, rerun applicable mechanical checks after each fix set, then restart the complete semantic audit from owner discovery. Completion requires one fresh full semantic pass after the last fix with no findings and no uncovered requirement.

@@ -128,7 +128,7 @@
     {
       "id": "overlap-workspace-standard-audit",
       "working_directory": "..",
-      "prompt": "Semantically audit every governed repository under an explicit workspace root for complete required-standard bindings, project overlays, duplicated provider prose, and tracked task artifacts. Include the deterministic inventory phase but do not modify repositories.",
+      "prompt": "Semantically audit every governed repository under an explicit workspace root for complete required-standard bindings, project overlays, duplicated provider prose, and instruction owner boundaries. Include the deterministic inventory phase but do not modify repositories.",
       "expected_skill_list": [
         "project-standards:project-standard-audit"
       ],

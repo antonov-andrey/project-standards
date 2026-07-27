@@ -44,7 +44,6 @@ If one required provider skill is unavailable, continue read-only discovery only
 - Heuristic signals, selected example lists, semantic inference, and false-positive allowlists are forbidden in executable standard checkers. Requirements that cannot be decided completely stay under mandatory semantic audit.
 - Consumer projects declare the complete exact `project-standards` provider catalog through their `AGENTS.md` section `Required Standards`; each declared skill applies only when its provider-owned trigger matches current project state or task scope, and consumer-local generated or copied standard prose is forbidden.
 - Domain-specific agent workflows and generic task orchestration do not belong in this repository.
-- Task pairs live only under the ignored `.spec/` root, remain untracked, and MUST NOT be deleted unless the user explicitly requests their deletion.
 
 ## Key Directory Map
 
@@ -52,14 +51,12 @@ If one required provider skill is unavailable, continue read-only discovery only
 project/
   plugins/
   pyproject.toml
-  .spec/
   skill_behavior_eval/
   test/
 ```
 
 - `plugins/`: provider root for plugin manifests, independently triggerable `Skill`s, shared plugin support owners, and the installable development tooling source.
 - `pyproject.toml`: canonical Python distribution, entrypoint, build-asset, dependency, and provider pytest configuration.
-- `.spec/`: ignored task-pair root governed by `project-standards:project-documentation-developer`.
 - `skill_behavior_eval/`: versioned model-based activation and semantic output-evaluation corpus for this provider.
 - `test/`: root behavior-test owner for the installable distribution, runner, scope runtime, and explicit pytest plugin.
 

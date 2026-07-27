@@ -9,24 +9,15 @@
 
 ## Mechanical Inventory
 
-- Mechanically verify root `AGENTS.md` presence, exact set equality between declared `project-standards:*` capabilities and the current provider catalog, actual Git ignore behavior for the root `.spec` directory from the repository's root `.gitignore`, and absence of tracked `.spec` artifacts.
+- Mechanically verify root `AGENTS.md` presence and exact set equality between declared `project-standards:*` capabilities and the current provider catalog.
 - Report duplicate Git common-directory worktrees as inventory evidence. Their existence is not a finding by itself; mutation of two such worktrees in one run is forbidden and belongs to execution-scope control.
 - Table-of-contents structure, instruction meaning, applicability wording, and semantic completeness are outside the script and MUST be audited semantically.
 - Report these results only as mechanical inventory.
 - Do not inspect imports, filenames, dependencies, manifests, prose tokens, or framework examples to infer applicable standards.
 - Do not produce a mechanically inferred `required_standard_list`, `missing_standard_list`, or whole-project validity verdict.
 
-## Semantic Handoff
+## Output
 
-- Continue with the complete semantic audit owned by `project-standard-audit`; determine conditional applicability from a complete inspection of actual tracked entities, technologies, boundaries, artifact families, workflows, instructions, and stable design.
-- Inspect every declared `project-standards:*` capability trigger for applicability; do not limit semantic discovery to checker output or previously observed project patterns.
-- Inspect other available provider families and treat a missing applicable non-`project-standards` capability as a finding unless the project records an explicit user-authorized exception.
-- Existing unmodeled Python remains `Legacy` until an explicit migration changes its owner.
-- Do not modify a protected instruction artifact without its approved source-to-target ledger.
-- After any fix, restart the complete semantic classification from repository and provider discovery.
-
-## Verification
-
-- Report the current `available_project_standard_list`, repository path, Git common directory, `declared_project_standard_list`, `missing_project_standard_list`, `unavailable_project_standard_list`, missing root instructions, task-root findings, and duplicate common-directory worktrees.
+- Report the current `available_project_standard_list`, repository path, Git common directory, `declared_project_standard_list`, `missing_project_standard_list`, `unavailable_project_standard_list`, missing root instructions, and duplicate common-directory worktrees.
 - Output `mechanical_status` and `semantic_audit_required=true`; never output `is_valid` for whole-project conformance.
-- Run the mechanical inventory and complete semantic audit in every workspace acceptance. Neither phase replaces the other.
+- Hand the inventory to the separate semantic phase without using it to derive semantic scope.

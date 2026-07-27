@@ -8,4 +8,4 @@
 - Documentation updates required by a code change MUST happen before handoff verification.
 - Every repository-local file target used by one Markdown link in tracked or untracked non-ignored maintained documentation MUST resolve from the owning document. External targets, same-file fragments, and link-like text inside fenced code blocks are outside this file-target check.
 - Create a retained target and verify complete semantic preservation before deleting or moving its source.
-- Do not leave forwarding documents, compatibility paths, simultaneous old and new owners, empty roots created for symmetry, or task history in tracked documentation. Apply the `.spec` retention and deletion contract from `references/documentation-model.md` to ignored task pairs.
+- Do not leave forwarding documents, compatibility paths, simultaneous old and new owners, empty roots created for symmetry, or task history in tracked documentation.

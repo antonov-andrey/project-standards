@@ -72,7 +72,6 @@ def _project_write(project_path: Path, *, extra_standard: str = "", omitted_stan
         omitted_standard: Optional provider capability omitted from the catalog.
     """
 
-    (project_path / ".gitignore").write_text(".spec/\n", encoding="utf-8")
     (project_path / "AGENTS.md").write_text(
         _instruction_text_get(extra_standard=extra_standard, omitted_standard=omitted_standard),
         encoding="utf-8",
@@ -132,8 +131,8 @@ def test_check_reports_clean_complete_catalog_without_semantic_verdict(tmp_path:
     assert "required_standard_list" not in project_payload
 
 
-def test_check_reports_exact_catalog_and_task_root_findings(tmp_path: Path) -> None:
-    """Every closed mechanical metadata failure is reported without inference.
+def test_check_reports_exact_catalog_findings(tmp_path: Path) -> None:
+    """Every catalog metadata failure is reported without inference.
 
     Args:
         tmp_path: Pytest temporary directory.
@@ -147,13 +146,6 @@ def test_check_reports_exact_catalog_and_task_root_findings(tmp_path: Path) -> N
         extra_standard="unavailable-standard",
         omitted_standard="python-developer",
     )
-    (project_path / ".gitignore").write_text("tmp/\n", encoding="utf-8")
-    (project_path / ".spec").mkdir()
-    (project_path / ".spec" / "task-spec.md").write_text("# Task\n", encoding="utf-8")
-    subprocess.run(
-        ["git", "-C", str(project_path), "add", "-f", ".spec/task-spec.md"],
-        check=True,
-    )
 
     result = _tool_run(workspace_root)
 
@@ -163,10 +155,7 @@ def test_check_reports_exact_catalog_and_task_root_findings(tmp_path: Path) -> N
     project_payload = payload["project_list"][0]
     assert project_payload["missing_project_standard_list"] == ["python-developer"]
     assert project_payload["missing_root_instruction_list"] == []
-    assert project_payload["task_root_issue_list"] == [
-        "root .spec directory is not ignored by repository .gitignore",
-        "tracked .spec paths: .spec/task-spec.md",
-    ]
+    assert "task_root_issue_list" not in project_payload
     assert project_payload["unavailable_project_standard_list"] == ["unavailable-standard"]
 
 
@@ -180,7 +169,6 @@ def test_check_reports_missing_root_instruction_file(tmp_path: Path) -> None:
     workspace_root = tmp_path / "workspace"
     project_path = workspace_root / "project"
     _git_init(project_path)
-    (project_path / ".gitignore").write_text("/.spec/\n", encoding="utf-8")
 
     result = _tool_run(workspace_root)
 
@@ -188,49 +176,6 @@ def test_check_reports_missing_root_instruction_file(tmp_path: Path) -> None:
     project_payload = json.loads(result.stdout)["project_list"][0]
     assert project_payload["missing_project_standard_list"] == _available_standard_name_list_get()
     assert project_payload["missing_root_instruction_list"] == ["AGENTS.md"]
-
-
-def test_check_uses_repository_ignore_behavior_instead_of_one_literal_rule(tmp_path: Path) -> None:
-    """Equivalent root ignore patterns satisfy the portable task-root contract.
-
-    Args:
-        tmp_path: Pytest temporary directory.
-    """
-
-    workspace_root = tmp_path / "workspace"
-    project_path = workspace_root / "project"
-    _git_init(project_path)
-    _project_write(project_path)
-    (project_path / ".gitignore").write_text("*.spec\n", encoding="utf-8")
-
-    result = _tool_run(workspace_root)
-
-    assert result.returncode == 0
-    project_payload = json.loads(result.stdout)["project_list"][0]
-    assert project_payload["task_root_issue_list"] == []
-
-
-def test_check_rejects_non_repository_task_root_ignore_source(tmp_path: Path) -> None:
-    """A worktree-local exclude cannot replace the portable repository contract.
-
-    Args:
-        tmp_path: Pytest temporary directory.
-    """
-
-    workspace_root = tmp_path / "workspace"
-    project_path = workspace_root / "project"
-    _git_init(project_path)
-    (project_path / ".gitignore").write_text("tmp/\n", encoding="utf-8")
-    (project_path / ".git" / "info" / "exclude").write_text(".spec/\n", encoding="utf-8")
-    (project_path / "AGENTS.md").write_text(_instruction_text_get(), encoding="utf-8")
-
-    result = _tool_run(workspace_root)
-
-    assert result.returncode == 1
-    project_payload = json.loads(result.stdout)["project_list"][0]
-    assert project_payload["task_root_issue_list"] == [
-        "root .spec directory is not ignored by repository .gitignore",
-    ]
 
 
 def test_check_reports_duplicate_git_common_directory_worktrees_as_inventory(tmp_path: Path) -> None:

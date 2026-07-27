@@ -65,7 +65,6 @@ class ProjectReport(TypedDict):
     missing_project_standard_list: list[str]
     missing_root_instruction_list: list[str]
     path: Path
-    task_root_issue_list: list[str]
     unavailable_project_standard_list: list[str]
 
 
@@ -109,37 +108,6 @@ def _missing_root_instruction_list_get(agents_path: Path) -> list[str]:
     """
 
     return [] if agents_path.is_file() else ["AGENTS.md"]
-
-
-def _task_root_issue_list_get(project_path: Path) -> list[str]:
-    """Return ignored task-root contract issues from actual Git behavior.
-
-    Args:
-        project_path: Canonical project worktree root.
-
-    Returns:
-        Missing repository ignore behavior or tracked-task identifiers.
-
-    Raises:
-        RuntimeError: If Git cannot evaluate the task-root ignore behavior.
-    """
-
-    issue_list: list[str] = []
-    ignore_result = subprocess.run(
-        ["git", "-C", str(project_path), "check-ignore", "--verbose", "--no-index", ".spec/"],
-        capture_output=True,
-        check=False,
-        text=True,
-    )
-    if ignore_result.returncode > 1:
-        raise RuntimeError(ignore_result.stderr.strip() or "Git could not evaluate the root .spec ignore behavior.")
-    ignore_source = ignore_result.stdout.partition(":")[0]
-    if ignore_result.returncode != 0 or ignore_source != ".gitignore":
-        issue_list.append("root .spec directory is not ignored by repository .gitignore")
-    tracked_task_path_list = _git_output_get(project_path, ["ls-files", ".spec"]).splitlines()
-    if tracked_task_path_list:
-        issue_list.append(f"tracked .spec paths: {', '.join(tracked_task_path_list)}")
-    return issue_list
 
 
 class ProjectStandardInventory:
@@ -187,14 +155,8 @@ class ProjectStandardInventory:
         declared_project_standard_list = required_standard_name_list_get(agents_path)
         missing_project_standard_list = sorted(self._available_standard_set - set(declared_project_standard_list))
         missing_root_instruction_list = _missing_root_instruction_list_get(agents_path)
-        task_root_issue_list = _task_root_issue_list_get(project_path)
         unavailable_project_standard_list = sorted(set(declared_project_standard_list) - self._available_standard_set)
-        if (
-            missing_project_standard_list
-            or missing_root_instruction_list
-            or task_root_issue_list
-            or unavailable_project_standard_list
-        ):
+        if missing_project_standard_list or missing_root_instruction_list or unavailable_project_standard_list:
             mechanical_status = "finding"
         else:
             mechanical_status = "clean"
@@ -207,7 +169,6 @@ class ProjectStandardInventory:
             missing_project_standard_list=missing_project_standard_list,
             missing_root_instruction_list=missing_root_instruction_list,
             path=project_path,
-            task_root_issue_list=task_root_issue_list,
             unavailable_project_standard_list=unavailable_project_standard_list,
         )
 
@@ -233,7 +194,6 @@ class ProjectStandardInventory:
                             "missing_root_instruction_list": project_report["missing_root_instruction_list"],
                             "path": str(project_report["path"]),
                             "semantic_audit_required": True,
-                            "task_root_issue_list": project_report["task_root_issue_list"],
                             "unavailable_project_standard_list": project_report["unavailable_project_standard_list"],
                         }
                         for project_report in workspace_report["project_report_list"]
