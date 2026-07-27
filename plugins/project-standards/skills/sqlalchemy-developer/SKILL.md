@@ -12,3 +12,5 @@ Read `references/session-transaction.md` when engines, bootstrap, sessions, prod
 Apply `project-foundation/references/temporal-data.md` to every temporal field.
 
 Use ORM-first behavior, explicit session and transaction ownership, canonical provider APIs, and final-state migrations. Analyze every engine and session call site before refactoring; mechanical replacement is forbidden.
+
+For a write flow, name the single orchestration or session owner that closes or commits the transaction; lower-level helpers receiving its session must not commit.
