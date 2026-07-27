@@ -259,12 +259,17 @@
         "agent-workflows:code-audit",
         "agent-workflows:code-antipattern-audit",
         "agent-workflows:instruction-audit",
-        "agent-workflows:instruction-migration"
+        "agent-workflows:instruction-migration",
+        "project-standards:project-standard-audit"
       ],
       "semantic_invariant_list": [
         {
           "id": "no-explicit-workflow",
           "text": "The response inspects and summarizes descriptions without activating any explicit-only audit or migration workflow."
+        },
+        {
+          "id": "standalone-instruction-ownership",
+          "text": "The response uses project-instruction-developer for standalone instruction classification and does not treat that classification as a complete standards audit."
         }
       ]
     }
