@@ -18,7 +18,6 @@
 - `project-standards:project-foundation`
 - `project-standards:project-instruction-developer`
 - `project-standards:project-standard-audit`
-- `project-standards:project-standardize`
 - `project-standards:pytest-developer`
 - `project-standards:python-cli-developer`
 - `project-standards:python-developer`
@@ -54,17 +53,21 @@ project/
   plugins/
   pyproject.toml
   .spec/
+  skill_behavior_eval/
   test/
 ```
 
 - `plugins/`: provider root for plugin manifests, independently triggerable `Skill`s, shared plugin support owners, and the installable development tooling source.
 - `pyproject.toml`: canonical Python distribution, entrypoint, build-asset, dependency, and provider pytest configuration.
 - `.spec/`: ignored task-pair root governed by `project-standards:project-documentation-developer`.
+- `skill_behavior_eval/`: versioned model-based activation and semantic output-evaluation corpus for this provider.
 - `test/`: root behavior-test owner for the installable distribution, runner, scope runtime, and explicit pytest plugin.
 
 ## Commands
 
 - Validate the plugin with `python ~/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py plugins/project-standards`.
 - Validate every skill with `python ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py <skill-root>`.
+- Run the workspace inventory with `python plugins/project-standards/skills/project-standard-audit/scripts/workspace_inventory.py --workspace-root <workspace-root> --check`.
 - Run changed-scope mechanical checking with `project-standard-check --project-root <repository-root> --scope changed`; use `--scope all` for the complete mechanical scope. Neither command replaces semantic audit.
+- Validate or run the provider behavior corpus with `plugins/project-standards/skills/project-instruction-developer/scripts/skill_behavior_eval.py --corpus skill_behavior_eval/corpus-v1.json --list` or the same command without `--list`.
 - Run provider tests with `pytest -q`.

@@ -1,6 +1,6 @@
 # Project Standards
 
-Codex marketplace repository for reusable, independently selectable engineering standards.
+Codex marketplace repository for a complete reusable engineering-standard catalog whose skills apply independently by their provider-owned triggers.
 
 ```bash
 codex plugin marketplace add antonov-andrey/project-standards --ref main

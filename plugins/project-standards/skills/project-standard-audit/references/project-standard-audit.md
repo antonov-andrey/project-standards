@@ -2,7 +2,7 @@
 
 - Confirm repository discovery is complete for the explicit workspace root.
 - Keep the mechanical and semantic phases separate:
-  - run the `project-standards:project-standardize` owner command `<project-standardize-skill-root>/scripts/project_standardize.py --workspace-root <workspace-root> --check` for repository discovery, root-instruction presence, exact equality between the declared and available `project-standards:*` catalogs, task-root ignore state, and duplicate-worktree evidence;
+  - run `project-standard-audit/scripts/workspace_inventory.py --workspace-root <workspace-root> --check` for repository discovery, root-instruction presence, exact equality between the declared and available `project-standards:*` catalogs, task-root ignore state, and duplicate-worktree evidence;
   - run `project-standard-check --project-root <repository-root> --scope all` for exact provider and Submodule mechanical predicates;
   - do not interpret either successful command as semantic coverage or conformance.
 - Derive semantic scope independently from every current canonical owner, not from checker inventory, checker output, previously noticed concerns, historical findings, or the implementation plan.

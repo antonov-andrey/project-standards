@@ -12,3 +12,5 @@ Treat `Required Standards` as the project-local provider-binding owner. Every go
 Keep reusable standard prose in its provider, concrete path bindings and project overlays in the governed project, and reusable domain assets in their user-approved domain plugin.
 
 For a protected instruction migration, require an approved source-to-target ledger before editing. Verify semantics directly; do not use prose assertions as a substitute.
+
+When skill descriptions, invocation policy, boundaries, or substantial instructions change, validate the provider's versioned behavior corpus with `scripts/skill_behavior_eval.py`. Use `--list` for deterministic corpus validation and run the model phase separately; it does not replace structural validators, pytest, or semantic owner audit.

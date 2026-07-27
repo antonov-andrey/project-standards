@@ -1,6 +1,6 @@
 ---
 name: zitadel-developer
-description: Use when adding, changing, reviewing, or configuring a ZITADEL deployment, OIDC session, token validation, direct identity API client, account switch, profile link, delegated identity boundary, identity telemetry, or identity persistence.
+description: Develop ZITADEL deployment, OIDC, token validation, direct identity clients, account switching, delegation, telemetry, and persistence.
 ---
 
 # ZITADEL Developer

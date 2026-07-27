@@ -1,0 +1,151 @@
+{
+  "schema_version": 1,
+  "suite": "project-standards",
+  "case_list": [
+    {
+      "id": "direct-aws-cloudformation",
+      "working_directory": "..",
+      "prompt": "Review a proposed CloudFormation change that adds an encrypted S3 bucket, Glue database, Lake Formation grants, and least-privilege IAM in the development AWS account. Explain the required implementation and verification boundaries.",
+      "expected_skill_list": [
+        "project-standards:project-foundation",
+        "project-standards:aws-cloudformation-developer"
+      ],
+      "forbidden_skill_list": [
+        "project-standards:kubernetes-developer",
+        "project-standards:docker-compose-developer"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "cloudformation-owner",
+          "text": "The response keeps infrastructure, IAM, encryption, account boundary, cost, and change-set verification in the CloudFormation/AWS owner instead of proposing ad hoc console drift."
+        },
+        {
+          "id": "no-production-mutation",
+          "text": "The response does not claim or propose an unapproved production mutation."
+        }
+      ]
+    },
+    {
+      "id": "indirect-react-table",
+      "working_directory": "..",
+      "prompt": "A React admin table must gain server-side sorting, account-scoped theme persistence, and a non-destructive route error state. Give the minimal implementation contract without changing files.",
+      "expected_skill_list": [
+        "project-standards:project-foundation",
+        "project-standards:react-ui-developer",
+        "project-standards:typescript-developer"
+      ],
+      "forbidden_skill_list": [
+        "project-standards:aws-cloudformation-developer",
+        "project-standards:kubernetes-developer"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "shared-ui-contract",
+          "text": "The response assigns repeated table, theme, and error behavior to shared declarative owners instead of per-page copies, and preserves current route content or shell context when an error occurs."
+        },
+        {
+          "id": "account-scope",
+          "text": "The response treats theme preference as account-scoped state rather than one browser-global value."
+        }
+      ]
+    },
+    {
+      "id": "incomplete-rest-route",
+      "working_directory": "..",
+      "prompt": "We need a new FastAPI route for status information, but it is not yet clear whether it is a Product API route or an infrastructure health endpoint. Explain what must be established before implementation.",
+      "expected_skill_list": [
+        "project-standards:project-foundation",
+        "project-standards:rest-api-server-developer"
+      ],
+      "forbidden_skill_list": [
+        "project-standards:zitadel-developer",
+        "project-standards:http-api-client-developer"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "route-classification-first",
+          "text": "The response first distinguishes Product API from infrastructure API because ownership, authentication, OpenAPI metadata, and access control depend on that decision."
+        },
+        {
+          "id": "no-assumed-zitadel",
+          "text": "The response does not assume that ZITADEL applies before the route classification is known."
+        }
+      ]
+    },
+    {
+      "id": "negative-document-wording",
+      "working_directory": "..",
+      "prompt": "Improve the wording of one Russian paragraph in DESIGN.md without changing its meaning or any code.",
+      "expected_skill_list": [
+        "project-standards:project-foundation",
+        "project-standards:project-documentation-developer"
+      ],
+      "forbidden_skill_list": [
+        "project-standards:python-developer",
+        "project-standards:typescript-developer",
+        "project-standards:rest-api-server-developer",
+        "project-standards:sqlalchemy-developer"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "meaning-preserved",
+          "text": "The response limits the work to documentation wording and explicitly preserves the stable contract's meaning."
+        }
+      ]
+    },
+    {
+      "id": "overlap-product-api-persistence-client",
+      "working_directory": "..",
+      "prompt": "Design a ZITADEL-authenticated Product API endpoint that persists a SQLAlchemy row and then invokes an idempotent outbound HTTP provider with bounded retries. Include the tests needed, but do not implement it.",
+      "expected_skill_list": [
+        "project-standards:project-foundation",
+        "project-standards:rest-api-server-developer",
+        "project-standards:sqlalchemy-developer",
+        "project-standards:http-api-client-developer",
+        "project-standards:python-retry-developer",
+        "project-standards:pytest-developer",
+        "project-standards:zitadel-developer"
+      ],
+      "forbidden_skill_list": [
+        "project-standards:react-ui-developer",
+        "project-standards:aws-cloudformation-developer"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "single-transaction-owner",
+          "text": "The response makes the transaction boundary explicit and does not hide commit ownership inside a lower-level helper."
+        },
+        {
+          "id": "retry-safety",
+          "text": "The response allows retries only for explicitly transient failures and ties repeatability to proven idempotency."
+        },
+        {
+          "id": "boundary-tests",
+          "text": "The response requires tests for authorization/OpenAPI, persistence transaction behavior, provider error classification, and retry edge cases."
+        }
+      ]
+    },
+    {
+      "id": "overlap-workspace-standard-audit",
+      "working_directory": "..",
+      "prompt": "Semantically audit every governed repository under an explicit workspace root for complete required-standard bindings, project overlays, duplicated provider prose, and tracked task artifacts. Include the deterministic inventory phase but do not modify repositories.",
+      "expected_skill_list": [
+        "project-standards:project-standard-audit"
+      ],
+      "forbidden_skill_list": [
+        "project-standards:project-standardize",
+        "agent-workflows:instruction-migration"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "mechanical-semantic-separation",
+          "text": "The response treats workspace inventory as mechanical evidence and independently derives the complete semantic audit scope from canonical owners."
+        },
+        {
+          "id": "read-only",
+          "text": "The response does not turn the audit into an automatic instruction migration or repository mutation."
+        }
+      ]
+    }
+  ]
+}

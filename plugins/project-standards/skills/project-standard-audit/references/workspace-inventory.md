@@ -1,4 +1,4 @@
-# Project Standardization
+# Workspace Inventory
 
 ## Discovery
 
@@ -16,9 +16,9 @@
 - Do not inspect imports, filenames, dependencies, manifests, prose tokens, or framework examples to infer applicable standards.
 - Do not produce a mechanically inferred `required_standard_list`, `missing_standard_list`, or whole-project validity verdict.
 
-## Semantic Classification
+## Semantic Handoff
 
-- Determine conditional applicability from a complete semantic inspection of actual tracked entities, technologies, boundaries, artifact families, workflows, instructions, and stable design.
+- Continue with the complete semantic audit owned by `project-standard-audit`; determine conditional applicability from a complete inspection of actual tracked entities, technologies, boundaries, artifact families, workflows, instructions, and stable design.
 - Inspect every declared `project-standards:*` capability trigger for applicability; do not limit semantic discovery to checker output or previously observed project patterns.
 - Inspect other available provider families and treat a missing applicable non-`project-standards` capability as a finding unless the project records an explicit user-authorized exception.
 - Existing unmodeled Python remains `Legacy` until an explicit migration changes its owner.
@@ -29,4 +29,4 @@
 
 - Report the current `available_project_standard_list`, repository path, Git common directory, `declared_project_standard_list`, `missing_project_standard_list`, `unavailable_project_standard_list`, missing root instructions, task-root findings, and duplicate common-directory worktrees.
 - Output `mechanical_status` and `semantic_audit_required=true`; never output `is_valid` for whole-project conformance.
-- Run the mechanical inventory and complete semantic audit in every standardization acceptance. Neither phase replaces the other.
+- Run the mechanical inventory and complete semantic audit in every workspace acceptance. Neither phase replaces the other.

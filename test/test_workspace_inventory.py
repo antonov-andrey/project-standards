@@ -1,4 +1,4 @@
-"""Behavior tests for read-only project standard inventory."""
+"""Behavior tests for the read-only workspace standard inventory."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOL_PATH = (
-    ROOT / "plugins" / "project-standards" / "skills" / "project-standardize" / "scripts" / "project_standardize.py"
+    ROOT / "plugins" / "project-standards" / "skills" / "project-standard-audit" / "scripts" / "workspace_inventory.py"
 )
 
 

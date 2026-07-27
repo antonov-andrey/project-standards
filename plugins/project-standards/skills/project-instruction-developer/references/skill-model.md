@@ -1,13 +1,28 @@
 # Skill Model
 
 - `Skill`
-  - Meaning: a `Self-contained` instruction entity rooted either at `plugins/<plugin_name>/skills/<skill_name>/` in its provider repository or at `.codex/skills/<skill_name>/` in the owning project when an explicit user-approved source-to-target decision retains that skill as project-specific.
+  - Meaning: a `Self-contained` instruction entity rooted either at `plugins/<plugin_name>/skills/<skill_name>/` in its provider repository or at `.agents/skills/<skill_name>/` in the owning project when an explicit user-approved source-to-target decision retains that skill as project-specific.
   - Provider identity: consumers MUST reference one provider `Skill` by its provider-qualified `<plugin_name>:<skill_name>` identity; one retained project-specific `Skill` uses its project-local `<skill_name>` identity only inside its owning project.
-  - Canonical contract: `plugins/<plugin_name>/skills/<skill_name>/SKILL.md` for one provider `Skill`, or `.codex/skills/<skill_name>/SKILL.md` for one retained project-specific `Skill`.
-  - Frontmatter description: a `Skill` frontmatter description MUST start with `Use when ...` and MUST describe concrete task triggers in direct language.
+  - Canonical contract: `plugins/<plugin_name>/skills/<skill_name>/SKILL.md` for one provider `Skill`, or `.agents/skills/<skill_name>/SKILL.md` for one retained project-specific `Skill`.
+  - Frontmatter description: a `Skill` frontmatter description MUST identify both its capability and concrete task triggers in concise direct language; one mandatory boilerplate prefix is forbidden.
   - Owner-local placement: any owner-local artifact of a `Skill` must live under that `Skill` root.
   - Owner-local assets: `test`, `tool`, and other `Skill`-local assets belong to that `Skill`.
   - Ownership limit: a `Skill` must not silently become a generic owner for unrelated repository-wide rules.
+
+## Harness Metadata
+
+- `agents/openai.yaml` exists only when one skill needs meaningful UI metadata, tool dependencies, or invocation policy.
+- Generic display names copied from a skill identifier and generic descriptions such as `Help with ... tasks` are forbidden.
+- A skill that must be explicitly invoked sets `policy.allow_implicit_invocation: false`; prose alone does not implement that policy.
+- `policy.allow_implicit_invocation: true` is the default and MUST NOT be written without another meaningful metadata field that justifies the file.
+
+## Behavioral Evaluation
+
+- Provider repositories with overlapping or non-trivial skill triggers MUST keep a versioned activation and output-evaluation corpus.
+- The corpus MUST cover direct, indirect, incomplete, negative, and overlap cases, with expected and forbidden activation sets plus semantic output invariants.
+- Model-based evaluation is an opt-in acceptance phase separate from deterministic validators, `pytest`, and mechanical standard checkers. It MUST use the target model generation and MUST NOT turn semantic output invariants into substring, heading, or keyword checks.
+- The shared runner belongs to `project-instruction-developer/scripts/skill_behavior_eval.py`; provider and retained project-local skills own only their `skill_behavior_eval/corpus-v1.json`.
+- One case runs a read-only target-model generation pass against actual discovered instructions and a separate target-model semantic judge pass. Expected activation is a required subset, forbidden activation is exact, and unlisted additional skills are allowed only when genuinely applicable.
 
 ## Role Contracts
 

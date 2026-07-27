@@ -1,7 +1,7 @@
 {
   "name": "project-standards",
-  "version": "0.1.0+codex.20260726202941",
-  "description": "Opinionated cross-domain project engineering standards, catalog binding, conditional applicability, and audit workflows.",
+  "version": "0.1.0+codex.20260727104708",
+  "description": "Opinionated cross-domain project engineering standards, catalog binding, conditional applicability, and semantic audit.",
   "author": {
     "name": "Andrey Antonov",
     "url": "https://github.com/antonov-andrey"
@@ -17,7 +17,7 @@
   "interface": {
     "displayName": "Project Standards",
     "shortDescription": "Apply reusable engineering standards consistently.",
-    "longDescription": "Project Standards provides independently selectable capability contracts for project structure, instructions, documentation, Python, APIs, persistence, identity, frontend, deployment, standardization, and semantic audit.",
+    "longDescription": "Project Standards provides independently triggerable capability contracts for project structure, instructions, documentation, Python, APIs, persistence, identity, frontend, deployment, catalog inventory, and semantic audit.",
     "developerName": "Andrey Antonov",
     "category": "DeveloperTools",
     "capabilities": [

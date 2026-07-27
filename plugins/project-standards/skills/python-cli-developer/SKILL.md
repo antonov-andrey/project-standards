@@ -1,6 +1,6 @@
 ---
 name: python-cli-developer
-description: Use when adding or changing an executable Python script, replacing shell automation with Python, changing a CLI parser, environment-backed flag, secret input, root entrypoint, test mode, or direct command verification.
+description: Develop executable Python scripts, CLI parsers, environment-backed flags, secret inputs, root entrypoints, and test modes.
 ---
 
 # Python CLI Developer

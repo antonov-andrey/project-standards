@@ -1,13 +1,13 @@
 ---
 name: project-standard-audit
-description: Use when semantically auditing one repository or workspace for required-standard catalog completeness, conditional applicability, provider availability, project overlays, duplicated standard prose, tracked task artifacts, or owner-boundary violations.
+description: Audit a repository or workspace for provider bindings, conditional applicability, project overlays, task artifacts, and owner-boundary violations.
 ---
 
 # Project Standard Audit
 
-Read `references/project-standard-audit.md` completely.
+Read `references/workspace-inventory.md` before inventorying a workspace. Read `references/project-standard-audit.md` completely before the semantic phase.
 
-Run the `project-standards:project-standardize` owner command `<project-standardize-skill-root>/scripts/project_standardize.py --workspace-root <workspace-root> --check` and `project-standard-check --project-root <repository-root> --scope all` as the separate mechanical phase. Treat their output only as mechanical evidence.
+Run `scripts/workspace_inventory.py --workspace-root <workspace-root> --check` and `project-standard-check --project-root <repository-root> --scope all` as the separate mechanical phase. Treat their output only as mechanical evidence.
 
 Build the semantic phase independently from the complete current owner set, never from checker identities, checker findings, previously noticed concerns, or a prior audit. Decide conditional applicability for every declared provider capability from its provider-owned trigger. Enumerate every applicable provider rule family, every project-local normative section, every mapped owner path, every referenced design boundary, and every candidate applicable non-`project-standards` provider not yet declared. Give each applicable requirement one semantic verdict with current evidence and each inapplicable capability one explicit reason.
 

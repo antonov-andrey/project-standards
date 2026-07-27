@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Discover Git projects and report exact mechanical standard metadata."""
+"""Inventory Git projects and report exact mechanical standard metadata."""
 
 from __future__ import annotations
 

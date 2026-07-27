@@ -1,6 +1,6 @@
 ---
 name: python-retry-developer
-description: Use when Python code adds or changes retry policy, retry loops, backoff, retryable exception or result classification, transport retries, or an operation that may execute more than once.
+description: Design Python retry boundaries, backoff, repeat safety, and retryable exception or result classification.
 ---
 
 # Python Retry Developer
