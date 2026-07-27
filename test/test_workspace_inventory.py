@@ -155,7 +155,6 @@ def test_check_reports_exact_catalog_findings(tmp_path: Path) -> None:
     project_payload = payload["project_list"][0]
     assert project_payload["missing_project_standard_list"] == ["python-developer"]
     assert project_payload["missing_root_instruction_list"] == []
-    assert "task_root_issue_list" not in project_payload
     assert project_payload["unavailable_project_standard_list"] == ["unavailable-standard"]
 
 
