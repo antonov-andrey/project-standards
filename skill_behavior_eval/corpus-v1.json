@@ -230,6 +230,24 @@
       ]
     },
     {
+      "id": "indirect-vcs-dependency",
+      "working_directory": "../../workflow-control-center",
+      "prompt": "Update requirements-dev.txt to consume the current project-standards distribution directly from its GitHub repository. Give the exact dependency line and governing revision policy without changing files.",
+      "expected_skill_list": [
+        "project-standards:project-foundation"
+      ],
+      "forbidden_skill_list": [
+        "project-standards:submodule-developer",
+        "project-standards:project-standard-audit"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "unpinned-vcs-default",
+          "text": "The response gives the canonical project-standards Git URL without a commit, tag, or branch suffix and says an explicit revision is allowed only with user authorization."
+        }
+      ]
+    },
+    {
       "id": "negative-explicit-audits",
       "working_directory": "..",
       "prompt": "Read the current skill descriptions and summarize which engineering areas they cover. Do not run an audit workflow, produce a report artifact, or change files.",
