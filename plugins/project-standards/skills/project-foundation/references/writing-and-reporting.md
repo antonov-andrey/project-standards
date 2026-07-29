@@ -21,6 +21,14 @@
 
 ## Language Zones
 
+- English-language contract:
+  - When an applicable rule requires English, use ASD-STE100 Simplified Technical English, Issue 9, dated 2025-01-15.
+  - Use only the words, meanings, parts of speech, and verb forms that Issue 9 permits. Use canonical project terms as technical nouns or technical verbs.
+  - Use American English spelling. Use active voice. Use the imperative form for instructions.
+  - Use no more than 20 words in a procedural sentence and 25 words in a descriptive sentence.
+  - Put only one instruction in a sentence. Put only one topic in a paragraph. Use no more than six sentences in a paragraph.
+  - Do not use contractions, semicolons, or unapproved phrasal verbs.
+  - This contract changes only the form of English. It MUST NOT change the required language, content, meaning, owner, scope, workflow, output structure, or literal text.
 - User-facing prose contract:
   - Any prose addressed to the user MUST use the language of the user's current request unless the user explicitly requests another language.
   - If the user's current request mixes multiple natural languages without an explicit language choice, use the dominant language of the user's prose; if that is still unclear, use the language of the most recent explicit user language preference, or otherwise the dominant language of the most recent user prose in the conversation.

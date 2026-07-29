@@ -3,6 +3,52 @@
   "suite": "project-standards",
   "case_list": [
     {
+      "id": "direct-simplified-technical-english",
+      "working_directory": "..",
+      "prompt": "In English, tell a new contributor how to run `pytest -q` in this repository and what to do if the test command fails. Do not run commands or change files.",
+      "expected_skill_list": [
+        "project-standards:project-foundation",
+        "project-standards:pytest-developer"
+      ],
+      "forbidden_skill_list": [
+        "agent-workflows:instruction-audit",
+        "project-standards:project-standard-audit"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "simplified-technical-english",
+          "text": "The response uses ASD-STE100 Simplified Technical English, Issue 9, with short direct sentences and preserves the literal command `pytest -q`."
+        },
+        {
+          "id": "test-failure-boundary",
+          "text": "The response tells the contributor to run the requested test command, inspect a failure, correct its cause, and rerun the same test without running commands or changing files itself."
+        }
+      ]
+    },
+    {
+      "id": "negative-russian-language-selection",
+      "working_directory": "..",
+      "prompt": "По-русски расскажи новому участнику, как запустить `pytest -q` в этом репозитории и что сделать, если тестовая команда завершится с ошибкой. Не запускай команды и не изменяй файлы.",
+      "expected_skill_list": [
+        "project-standards:project-foundation",
+        "project-standards:pytest-developer"
+      ],
+      "forbidden_skill_list": [
+        "agent-workflows:instruction-audit",
+        "project-standards:project-standard-audit"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "russian-language-selection",
+          "text": "The response remains in Russian; the English-language contract does not change the existing user-language selection."
+        },
+        {
+          "id": "test-failure-boundary",
+          "text": "The response tells the contributor to run the requested test command, inspect a failure, correct its cause, and rerun the same test without running commands or changing files itself."
+        }
+      ]
+    },
+    {
       "id": "direct-aws-cloudformation",
       "working_directory": "..",
       "prompt": "Review a proposed CloudFormation change that adds an encrypted S3 bucket, Glue database, Lake Formation grants, and least-privilege IAM in the development AWS account. Explain the required implementation and verification boundaries.",
