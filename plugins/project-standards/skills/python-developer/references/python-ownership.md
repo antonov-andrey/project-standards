@@ -22,6 +22,13 @@ These rules apply to non-`Legacy`, non-test Python code outside `Submodule` code
 
 - Every new module, class, function, or data object in changed scope MUST have explicit stable ownership.
 - Placement of functions and classes is a strict ownership contract, not a convenience choice.
+- Before adding behavior or a dependency to an orchestration, composition-root, lifecycle, controller, or workflow owner, the change MUST classify the new responsibility against the owner's existing responsibility map.
+- One such owner MAY sequence and wire multiple collaborators, but MUST NOT itself implement more than one independent external-boundary family, persisted-state lifecycle, security policy family, artifact lifecycle, or domain workflow.
+- When a change introduces a second independent responsibility family, the same change MUST create or reuse one cohesive collaborator that owns that family's state, invariants, and boundary behavior; postponing the split until a later audit is forbidden.
+- The caller MUST depend on that collaborator through the narrowest concrete interface needed by the run flow. A forwarding wrapper, method bucket, mixin, inheritance split, or file move that leaves behavior and state owned by the original dominant owner does not satisfy this contract.
+- A composition root MUST remain wiring and top-level sequencing code. Boundary-specific parsing, validation, retries, lifecycle state, artifact manipulation, and policy decisions belong to the stable collaborator that owns that boundary.
+- Before completing any change to one of these owners, semantic verification MUST inspect its constructor dependencies, imported boundary families, persisted state, public operations, and private method groups together. The reviewer MUST be able to name one cohesive responsibility for every non-wiring method group and MUST split any unrelated group found.
+- File size, method count, and dependency count are discovery signals, not acceptance thresholds. A large cohesive algorithm MAY remain one owner, while a smaller owner with unrelated responsibility families MUST still be split.
 - One function used only inside one module MUST be a private module-level function in that same module.
 - One class used only inside one module MUST stay in that same module.
 - Private classes are forbidden; file-local classes MUST stay non-private and rely on module-local placement instead of private naming.

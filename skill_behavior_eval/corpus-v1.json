@@ -318,6 +318,29 @@
           "text": "The response uses project-instruction-developer for standalone instruction classification and does not treat that classification as a complete standards audit."
         }
       ]
+    },
+    {
+      "id": "indirect-python-orchestration-ownership",
+      "working_directory": "../../workflow-control-center",
+      "prompt": "Review a proposed change that adds S3 artifact cleanup, SQL lifecycle state, image publication, and retry policy directly to an existing Python deployment coordinator. Explain the required ownership refactor and semantic verification without changing files.",
+      "expected_skill_list": [
+        "project-standards:project-foundation",
+        "project-standards:python-developer"
+      ],
+      "forbidden_skill_list": [
+        "project-standards:legacy-python-maintainer",
+        "project-standards:project-standard-audit"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "orchestration-responsibility-split",
+          "text": "The response keeps the coordinator to wiring and top-level sequencing, classifies S3 artifact lifecycle, SQL persisted-state lifecycle, image publication, and retry policy as independent responsibilities, and requires cohesive collaborators for the applicable families instead of adding them directly."
+        },
+        {
+          "id": "semantic-owner-verification",
+          "text": "The response requires semantic inspection of constructor dependencies, boundary imports, state, public operations, and private method groups; it does not accept file size thresholds, mixins, forwarding wrappers, or a file move as proof of correct ownership."
+        }
+      ]
     }
   ]
 }

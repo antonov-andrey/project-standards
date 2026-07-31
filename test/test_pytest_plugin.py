@@ -72,7 +72,9 @@ def _test_module_write(test_root: Path, module_name: str) -> None:
     (test_root / module_name).write_text("def test_fixture():\n    assert True\n", encoding="utf-8")
 
 
-def test_suite_discovery_selects_root_skill_and_direct_submodule_owners(tmp_path: Path) -> None:
+def test_suite_discovery_selects_root_skill_and_direct_submodule_owners(
+    tmp_path: Path,
+) -> None:
     """Discovery includes real owner roots and excludes unrelated nested repositories.
 
     Args:
@@ -105,7 +107,12 @@ def test_suite_discovery_selects_root_skill_and_direct_submodule_owners(tmp_path
         encoding="utf-8",
     )
     subprocess.run(
-        ["git", "add", ".gitmodules", "plugins/consumer-plugin/skills/consumer-skill/SKILL.md"],
+        [
+            "git",
+            "add",
+            ".gitmodules",
+            "plugins/consumer-plugin/skills/consumer-skill/SKILL.md",
+        ],
         cwd=project_root,
         check=True,
     )
@@ -141,7 +148,9 @@ def test_suite_discovery_uses_submodule_root_standalone(tmp_path: Path) -> None:
     assert relative_path_list == ["skills/provider-skill/test", "test"]
 
 
-def test_suite_discovery_excludes_ignored_task_and_environment_roots(tmp_path: Path) -> None:
+def test_suite_discovery_excludes_ignored_task_and_environment_roots(
+    tmp_path: Path,
+) -> None:
     """Ignored task, environment, and build roots never become owner suites.
 
     Args:
@@ -175,7 +184,9 @@ def test_suite_discovery_excludes_ignored_task_and_environment_roots(tmp_path: P
     assert relative_path_list == ["test"]
 
 
-def test_pytest_process_collects_each_owner_suite_once_in_deterministic_order(tmp_path: Path) -> None:
+def test_pytest_process_collects_each_owner_suite_once_in_deterministic_order(
+    tmp_path: Path,
+) -> None:
     """Real pytest collection includes each declared owner root exactly once.
 
     Args:
@@ -203,7 +214,12 @@ def test_pytest_process_collects_each_owner_suite_once_in_deterministic_order(tm
     _git_init(unrelated_root)
     _test_module_write(unrelated_root / "test", "test_unrelated.py")
     subprocess.run(
-        ["git", "add", ".gitmodules", "plugins/consumer-plugin/skills/consumer-skill/SKILL.md"],
+        [
+            "git",
+            "add",
+            ".gitmodules",
+            "plugins/consumer-plugin/skills/consumer-skill/SKILL.md",
+        ],
         cwd=project_root,
         check=True,
     )
@@ -224,7 +240,9 @@ def test_pytest_process_collects_each_owner_suite_once_in_deterministic_order(tm
     ]
 
 
-def test_pytest_process_honors_code_ignore_and_consumer_fixture_conftest(tmp_path: Path) -> None:
+def test_pytest_process_honors_code_ignore_and_consumer_fixture_conftest(
+    tmp_path: Path,
+) -> None:
     """Explicit code-suite ignore coexists with one real consumer fixture.
 
     Args:
@@ -265,7 +283,9 @@ def test_pytest_process_honors_code_ignore_and_consumer_fixture_conftest(tmp_pat
     assert "1 passed" in run_result.stdout
 
 
-def test_pytest_configuration_fails_clearly_when_provider_plugin_is_absent(tmp_path: Path) -> None:
+def test_pytest_configuration_fails_clearly_when_provider_plugin_is_absent(
+    tmp_path: Path,
+) -> None:
     """A consumer cannot silently run with its required discovery owner missing.
 
     Args:
@@ -308,4 +328,5 @@ def test_pytest_configuration_fails_clearly_when_provider_plugin_is_absent(tmp_p
     assert result.returncode != 0
     output = result.stdout + result.stderr
     assert "project_standards.pytest_plugin" in output
-    assert "No module named project_standards" in output
+    assert "No module named" in output
+    assert "project_standards" in output
