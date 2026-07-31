@@ -464,9 +464,11 @@ Exceptions:
 Positive match:
 - Bucket names such as `models`, `services`, `utils`, `runtime`, `common`, or similar collect unrelated logic because ownership is organized by stage rather than concept.
 - Understanding one business concept requires jumping across several generic buckets instead of reading one cohesive owner area.
+- One overloaded module was split into many siblings in a broad directory, with the same subsystem prefix repeated in filenames instead of represented once by an owning package path.
 Required evidence:
 - File or line evidence of heterogeneous logic inside a bucket owner or across parallel stage buckets.
 - Evidence that the current names hide stable domain or boundary ownership.
+- For a flat prefixed file family, evidence that the files share one subsystem context and contain child responsibility families that can be named as package owners.
 Negative match:
 - Tiny cohesive package-local helpers.
 - Package export surfaces.
@@ -480,6 +482,7 @@ Scope expansion:
 Refactor direction:
 - Re-slice modules by domain concept or stable technical role.
 - Split generic buckets once they stop being tiny and cohesive.
+- Create the smallest owning package for one cohesive subsystem, remove the repeated subsystem filename prefix, and introduce child subpackages only for real responsibility families rather than directory symmetry.
 Exceptions:
 - Tiny cohesive package-local modules.
 - Package init export surfaces.
