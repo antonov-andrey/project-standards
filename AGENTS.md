@@ -49,16 +49,22 @@ If one required provider skill is unavailable, continue read-only discovery only
 
 ```text
 project/
+  .spec/
+  .worktree/
   plugins/
   pyproject.toml
   skill_behavior_eval/
   test/
+  worktree-bootstrap.toml
 ```
 
+- `.spec/`: harness-neutral task-artifact root whose reusable semantics are owned by `agent-workflows:goal-brainstorm`.
+- `.worktree/`: task-worktree container whose reusable semantics are owned by `agent-workflows:goal-brainstorm`.
 - `plugins/`: provider root for plugin manifests, independently triggerable `Skill`s, shared plugin support owners, and the installable development tooling source.
 - `pyproject.toml`: canonical Python distribution, entrypoint, build-asset, dependency, and provider pytest configuration.
 - `skill_behavior_eval/`: versioned model-based activation and semantic output-evaluation corpus for this provider.
 - `test/`: root behavior-test owner for the installable distribution, runner, scope runtime, and explicit pytest plugin.
+- `worktree-bootstrap.toml`: repository bootstrap-resource binding for the reusable manifest contract owned by `agent-workflows:goal-brainstorm`.
 
 ## Commands
 
