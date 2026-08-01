@@ -4,14 +4,15 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Callable, Sequence
-from concurrent.futures import as_completed, ThreadPoolExecutor
-from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
 import json
-from pathlib import Path
+import os
 import subprocess
 import tempfile
+from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 DEFAULT_MODEL = "gpt-5.6-sol"
@@ -260,13 +261,277 @@ def _semantic_invariant_tuple_get(
     return tuple(invariant_list)
 
 
+def _git_output_get(repository_root: Path, argument_list: list[str], *, context: str) -> str:
+    """Return checked Git output for one repository-local discovery command."""
+
+    environment_by_name_map = os.environ.copy()
+    for variable_name in (
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_COMMON_DIR",
+        "GIT_CONFIG",
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_CONFIG_SYSTEM",
+        "GIT_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_NAMESPACE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_PREFIX",
+        "GIT_QUARANTINE_PATH",
+        "GIT_WORK_TREE",
+    ):
+        environment_by_name_map.pop(variable_name, None)
+    for variable_name in list(environment_by_name_map):
+        if variable_name.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")):
+            environment_by_name_map.pop(variable_name)
+    environment_by_name_map.pop("GIT_LITERAL_PATHSPECS", None)
+    environment_by_name_map["GIT_TERMINAL_PROMPT"] = "0"
+    result = subprocess.run(
+        ["git", "-C", str(repository_root), *argument_list],
+        capture_output=True,
+        check=False,
+        encoding="utf-8",
+        env=environment_by_name_map,
+        errors="surrogateescape",
+    )
+    if result.returncode != 0:
+        raise SkillBehaviorEvalError(f"{context}: Git command failed: {result.stderr.strip()}")
+    return result.stdout
+
+
+def _git_repository_root_get(path: Path, *, context: str) -> Path:
+    """Return the exact worktree root containing one existing directory."""
+
+    root_text = _git_output_get(
+        path,
+        ["rev-parse", "--show-toplevel"],
+        context=context,
+    ).strip()
+    if not root_text:
+        raise SkillBehaviorEvalError(f"{context}: Git returned an empty repository root")
+    return Path(root_text).resolve()
+
+
+def _git_common_directory_get(repository_root: Path, *, context: str) -> Path:
+    """Return one repository's canonical common Git administration directory."""
+
+    common_directory = Path(
+        _git_output_get(
+            repository_root,
+            ["rev-parse", "--git-common-dir"],
+            context=context,
+        ).strip()
+    )
+    if not common_directory.is_absolute():
+        common_directory = repository_root / common_directory
+    return common_directory.resolve()
+
+
+def _registered_worktree_root_validate(
+    raw_worktree_path: str,
+    *,
+    expected_branch_ref: str | None,
+    expected_common_directory: Path,
+    context: str,
+) -> Path:
+    """Return one physical registered worktree after re-proving its Git identity."""
+
+    worktree_path = Path(raw_worktree_path)
+    if worktree_path.is_symlink() or not worktree_path.is_dir():
+        raise SkillBehaviorEvalError(f"{context}: registered worktree is not one physical directory: {worktree_path}")
+    absolute_worktree_path = Path(os.path.abspath(worktree_path))
+    resolved_worktree_root = worktree_path.resolve()
+    if absolute_worktree_path != resolved_worktree_root:
+        raise SkillBehaviorEvalError(f"{context}: registered worktree path traverses a symbolic link: {worktree_path}")
+    if (
+        _git_repository_root_get(
+            resolved_worktree_root,
+            context=f"{context}: cannot re-prove registered worktree root",
+        )
+        != resolved_worktree_root
+        or _git_common_directory_get(
+            resolved_worktree_root,
+            context=f"{context}: cannot re-prove registered worktree owner",
+        )
+        != expected_common_directory
+    ):
+        raise SkillBehaviorEvalError(f"{context}: registered worktree Git identity is inconsistent: {worktree_path}")
+    if expected_branch_ref is not None:
+        actual_branch_ref = _git_output_get(
+            resolved_worktree_root,
+            ["symbolic-ref", "--quiet", "HEAD"],
+            context=f"{context}: registered worktree must use one branch",
+        ).strip()
+        if actual_branch_ref != expected_branch_ref:
+            raise SkillBehaviorEvalError(
+                f"{context}: registered worktree branch is inconsistent: " f"{resolved_worktree_root}"
+            )
+    return resolved_worktree_root
+
+
+def _git_worktree_record_list_get(repository_root: Path, *, context: str) -> list[dict[str, str]]:
+    """Return NUL-safe Git worktree records."""
+
+    output = _git_output_get(
+        repository_root,
+        ["worktree", "list", "--porcelain", "-z"],
+        context=context,
+    )
+    record_list: list[dict[str, str]] = []
+    current_record: dict[str, str] = {}
+    for item in [*output.split("\0"), ""]:
+        if not item:
+            if current_record:
+                if "worktree" not in current_record:
+                    raise SkillBehaviorEvalError(f"{context}: worktree record has no path")
+                record_list.append(current_record)
+                current_record = {}
+            continue
+        key, separator, value = item.partition(" ")
+        if not separator:
+            current_record[item] = ""
+        else:
+            current_record[key] = value
+    if not record_list:
+        raise SkillBehaviorEvalError(f"{context}: Git returned no worktree records")
+    return record_list
+
+
+def _working_directory_resolve(
+    resolved_corpus_path: Path,
+    working_directory_value: str,
+    *,
+    context: str,
+) -> Path:
+    """Resolve one corpus directory, including a sibling worktree on the same branch."""
+
+    raw_direct_candidate = resolved_corpus_path.parent / working_directory_value
+    direct_candidate = raw_direct_candidate.resolve()
+    try:
+        source_repository_root = _git_repository_root_get(
+            resolved_corpus_path.parent,
+            context=f"{context}: cannot identify the corpus repository",
+        )
+    except SkillBehaviorEvalError:
+        if direct_candidate.is_dir():
+            return direct_candidate
+        raise
+    source_branch_ref = _git_output_get(
+        source_repository_root,
+        ["symbolic-ref", "--quiet", "HEAD"],
+        context=f"{context}: corpus worktree must use one branch",
+    ).strip()
+    if not source_branch_ref.startswith("refs/heads/"):
+        raise SkillBehaviorEvalError(f"{context}: corpus worktree has no local branch identity")
+    if direct_candidate.is_dir():
+        direct_repository_root = _git_repository_root_get(
+            direct_candidate,
+            context=f"{context}: direct target is not inside a Git worktree",
+        )
+        direct_branch_ref = _git_output_get(
+            direct_repository_root,
+            ["symbolic-ref", "--quiet", "HEAD"],
+            context=f"{context}: direct target must use one branch",
+        ).strip()
+        if direct_branch_ref != source_branch_ref:
+            raise SkillBehaviorEvalError(
+                f"{context}: direct target branch {direct_branch_ref or '<detached>'} "
+                f"does not match corpus branch {source_branch_ref}"
+            )
+        if Path(os.path.abspath(raw_direct_candidate)) != direct_candidate:
+            raise SkillBehaviorEvalError(
+                f"{context}: direct target path traverses a symbolic link: " f"{raw_direct_candidate}"
+            )
+        return direct_candidate
+
+    source_worktree_record_list = _git_worktree_record_list_get(
+        source_repository_root,
+        context=f"{context}: cannot identify the corpus primary worktree",
+    )
+    source_common_directory = _git_common_directory_get(
+        source_repository_root,
+        context=f"{context}: cannot identify the corpus Git owner",
+    )
+    primary_repository_root = _registered_worktree_root_validate(
+        source_worktree_record_list[0]["worktree"],
+        expected_branch_ref=None,
+        expected_common_directory=source_common_directory,
+        context=f"{context}: corpus primary worktree",
+    )
+    try:
+        corpus_relative_path = resolved_corpus_path.relative_to(source_repository_root)
+    except ValueError as exc:
+        raise SkillBehaviorEvalError(f"{context}: corpus path escapes its current worktree") from exc
+    raw_primary_candidate = primary_repository_root / corpus_relative_path.parent / working_directory_value
+    primary_candidate = raw_primary_candidate.resolve()
+    if Path(os.path.abspath(raw_primary_candidate)) != primary_candidate:
+        raise SkillBehaviorEvalError(
+            f"{context}: primary-layout target path traverses a symbolic link: " f"{raw_primary_candidate}"
+        )
+    if not primary_candidate.is_dir():
+        raise SkillBehaviorEvalError(
+            f"{context}: not a directory in either the current or primary layout: {direct_candidate}"
+        )
+    target_primary_root = _git_repository_root_get(
+        primary_candidate,
+        context=f"{context}: target directory is not inside a Git repository",
+    )
+    try:
+        target_relative_path = primary_candidate.relative_to(target_primary_root)
+    except ValueError as exc:
+        raise SkillBehaviorEvalError(f"{context}: target directory escapes its primary repository") from exc
+    target_common_directory = _git_common_directory_get(
+        target_primary_root,
+        context=f"{context}: cannot identify target Git owner",
+    )
+    matching_worktree_root_list = []
+    for record in _git_worktree_record_list_get(
+        target_primary_root,
+        context=f"{context}: cannot inspect target worktrees",
+    ):
+        if record.get("branch") != source_branch_ref:
+            continue
+        matching_worktree_root_list.append(
+            _registered_worktree_root_validate(
+                record["worktree"],
+                expected_branch_ref=source_branch_ref,
+                expected_common_directory=target_common_directory,
+                context=f"{context}: same-branch target worktree",
+            )
+        )
+    if len(matching_worktree_root_list) != 1:
+        raise SkillBehaviorEvalError(
+            f"{context}: expected exactly one target worktree on {source_branch_ref}, "
+            f"found {len(matching_worktree_root_list)}"
+        )
+    same_branch_candidate = (matching_worktree_root_list[0] / target_relative_path).resolve()
+    try:
+        same_branch_candidate.relative_to(matching_worktree_root_list[0])
+    except ValueError as exc:
+        raise SkillBehaviorEvalError(
+            f"{context}: same-branch target path escapes its worktree: " f"{same_branch_candidate}"
+        ) from exc
+    if (
+        not same_branch_candidate.is_dir()
+        or _git_repository_root_get(
+            same_branch_candidate,
+            context=f"{context}: cannot re-prove same-branch target path",
+        )
+        != matching_worktree_root_list[0]
+    ):
+        raise SkillBehaviorEvalError(f"{context}: same-branch target path is not a directory: {same_branch_candidate}")
+    return same_branch_candidate
+
+
 def _corpus_case_list_load(corpus_path: Path) -> list[SkillBehaviorCase]:
     """Load and validate all cases from one corpus."""
 
     resolved_corpus_path = corpus_path.expanduser().resolve()
     try:
         payload = json.loads(resolved_corpus_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise SkillBehaviorEvalError(f"{resolved_corpus_path}: cannot load corpus: {exc}") from exc
     if not isinstance(payload, dict):
         raise SkillBehaviorEvalError(f"{resolved_corpus_path}: corpus root must be an object")
@@ -276,7 +541,7 @@ def _corpus_case_list_load(corpus_path: Path) -> list[SkillBehaviorCase]:
         context=str(resolved_corpus_path),
         required_key_set={"case_list", "schema_version", "suite"},
     )
-    if payload["schema_version"] != SCHEMA_VERSION:
+    if type(payload["schema_version"]) is not int or payload["schema_version"] != SCHEMA_VERSION:
         raise SkillBehaviorEvalError(
             f"{resolved_corpus_path}: schema_version must equal {SCHEMA_VERSION}, got {payload['schema_version']!r}"
         )
@@ -330,9 +595,11 @@ def _corpus_case_list_load(corpus_path: Path) -> list[SkillBehaviorCase]:
             context=case_context,
             field_name="working_directory",
         )
-        working_directory = (resolved_corpus_path.parent / working_directory_value).resolve()
-        if not working_directory.is_dir():
-            raise SkillBehaviorEvalError(f"{case_context}.working_directory: not a directory: {working_directory}")
+        working_directory = _working_directory_resolve(
+            resolved_corpus_path,
+            working_directory_value,
+            context=f"{case_context}.working_directory",
+        )
         case_list.append(
             SkillBehaviorCase(
                 corpus_path=resolved_corpus_path,
