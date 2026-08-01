@@ -42,3 +42,6 @@
 - Additional transaction boundaries are allowed only when batching, retry isolation, or another correctness constraint requires them.
 - When extra boundaries are required, the owning code or governing contract when contract-relevant MUST make that reason explicit.
 - Read-only explicit transaction boundaries are allowed only when the runtime or DB contract requires them and MUST NOT be introduced only to compensate for hidden session-state handling problems.
+- A transaction holding an explicit row, table, or advisory lock MUST NOT synchronously call an external component or callback that can open another transaction against the same locked state or wait on code that may require that lock.
+- A durable flow that must cross such an external boundary MUST persist and close its current transaction first, perform the idempotent external operation without the database lock, then start a new transaction and revalidate the complete object, state, fence, cancellation, and external-resource identity before continuing.
+- Long-running network, process, queue, or filesystem effects SHOULD run outside database transactions; any exception requires an explicit correctness reason and proof that the effect cannot call back into or wait on the locked database state.
