@@ -1,6 +1,6 @@
 {
   "name": "project-standards",
-  "version": "0.1.0+codex.20260729093907",
+  "version": "0.1.0+codex.20260801045242",
   "description": "Opinionated cross-domain project engineering standards, catalog binding, conditional applicability, and semantic audit.",
   "author": {
     "name": "Andrey Antonov",
