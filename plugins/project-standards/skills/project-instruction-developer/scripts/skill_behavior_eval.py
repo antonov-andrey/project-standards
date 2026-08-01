@@ -525,8 +525,12 @@ def _working_directory_resolve(
     return same_branch_candidate
 
 
-def _corpus_case_list_load(corpus_path: Path) -> list[SkillBehaviorCase]:
-    """Load and validate all cases from one corpus."""
+def _corpus_case_list_load(
+    corpus_path: Path,
+    *,
+    selected_case_id_set: set[str] | None = None,
+) -> list[SkillBehaviorCase]:
+    """Load all case contracts while resolving only the selected runtime roots."""
 
     resolved_corpus_path = corpus_path.expanduser().resolve()
     try:
@@ -551,6 +555,7 @@ def _corpus_case_list_load(corpus_path: Path) -> list[SkillBehaviorCase]:
         raise SkillBehaviorEvalError(f"{resolved_corpus_path}.case_list: expected non-empty object list")
 
     case_list: list[SkillBehaviorCase] = []
+    corpus_case_id_list: list[str] = []
     for index, raw_case in enumerate(raw_case_list):
         case_context = f"{resolved_corpus_path}.case_list[{index}]"
         if not isinstance(raw_case, dict):
@@ -590,11 +595,18 @@ def _corpus_case_list_load(corpus_path: Path) -> list[SkillBehaviorCase]:
             raise SkillBehaviorEvalError(
                 f"{case_context}: expected and forbidden skills overlap: {', '.join(sorted(overlap_skill_set))}"
             )
+        case_id = _non_empty_string_get(raw_case, context=case_context, field_name="id")
+        corpus_case_id_list.append(case_id)
         working_directory_value = _non_empty_string_get(
             raw_case,
             context=case_context,
             field_name="working_directory",
         )
+        selected = selected_case_id_set is None or bool({case_id, f"{suite}:{case_id}"} & selected_case_id_set)
+        prompt = _non_empty_string_get(raw_case, context=case_context, field_name="prompt")
+        semantic_invariant_list = _semantic_invariant_tuple_get(raw_case, context=case_context)
+        if not selected:
+            continue
         working_directory = _working_directory_resolve(
             resolved_corpus_path,
             working_directory_value,
@@ -605,15 +617,14 @@ def _corpus_case_list_load(corpus_path: Path) -> list[SkillBehaviorCase]:
                 corpus_path=resolved_corpus_path,
                 expected_skill_list=expected_skill_list,
                 forbidden_skill_list=forbidden_skill_list,
-                id=_non_empty_string_get(raw_case, context=case_context, field_name="id"),
-                prompt=_non_empty_string_get(raw_case, context=case_context, field_name="prompt"),
-                semantic_invariant_list=_semantic_invariant_tuple_get(raw_case, context=case_context),
+                id=case_id,
+                prompt=prompt,
+                semantic_invariant_list=semantic_invariant_list,
                 suite=suite,
                 working_directory=working_directory,
             )
         )
-    case_id_list = [case.id for case in case_list]
-    if len(case_id_list) != len(set(case_id_list)):
+    if len(corpus_case_id_list) != len(set(corpus_case_id_list)):
         raise SkillBehaviorEvalError(f"{resolved_corpus_path}: duplicate case ids are forbidden")
     return case_list
 
@@ -625,18 +636,21 @@ def _selected_case_list_get(
 ) -> list[SkillBehaviorCase]:
     """Load corpora and apply exact case selection."""
 
-    case_list = [case for corpus_path in corpus_path_list for case in _corpus_case_list_load(corpus_path)]
+    requested_case_id_set = set(case_id_list)
+    case_list = [
+        case
+        for corpus_path in corpus_path_list
+        for case in _corpus_case_list_load(
+            corpus_path,
+            selected_case_id_set=(requested_case_id_set or None),
+        )
+    ]
     qualified_id_list = [f"{case.suite}:{case.id}" for case in case_list]
     if len(qualified_id_list) != len(set(qualified_id_list)):
         raise SkillBehaviorEvalError("duplicate suite-qualified case ids are forbidden")
     if not case_id_list:
         return case_list
-    requested_case_id_set = set(case_id_list)
-    selected_case_list = [
-        case
-        for case in case_list
-        if case.id in requested_case_id_set or f"{case.suite}:{case.id}" in requested_case_id_set
-    ]
+    selected_case_list = case_list
     matched_case_id_set = {
         requested_id
         for requested_id in requested_case_id_set

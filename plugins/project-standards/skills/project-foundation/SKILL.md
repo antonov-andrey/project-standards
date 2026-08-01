@@ -10,6 +10,7 @@ Read every reference needed by the current scope before acting:
 - `references/repository-model.md` for repository entities, ownership, and project-local executable automation;
 - `references/writing-and-reporting.md` for prose and problem reports;
 - `references/execution.md` for mutation safety, evidence, and verification;
+- `references/machine-readable-format.md` whenever selecting or changing a project-owned machine-readable file format or filename extension;
 - `references/temporal-data.md` whenever time values or timestamps are involved;
 - `references/harness-configuration.md` whenever harness configuration is involved.
 

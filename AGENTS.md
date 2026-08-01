@@ -52,19 +52,17 @@ project/
   plugins/
   pyproject.toml
   skill_behavior_eval/
-  .spec/
   test/
   .worktree/
-  worktree-bootstrap.toml
+  worktree-bootstrap.yaml
 ```
 
 - `plugins/`: provider root for plugin manifests, independently triggerable `Skill`s, shared plugin support owners, and the installable development tooling source.
 - `pyproject.toml`: canonical Python distribution, entrypoint, build-asset, dependency, and provider pytest configuration.
 - `skill_behavior_eval/`: versioned model-based activation and semantic output-evaluation corpus for this provider.
-- `.spec/`: harness-neutral task-artifact root whose reusable semantics are owned by `agent-workflows:goal-brainstorm`.
 - `test/`: root behavior-test owner for the installable distribution, runner, scope runtime, and explicit pytest plugin.
 - `.worktree/`: task-worktree container whose reusable semantics are owned by `agent-workflows:goal-brainstorm`.
-- `worktree-bootstrap.toml`: repository bootstrap-resource binding for the reusable manifest contract owned by `agent-workflows:goal-brainstorm`.
+- `worktree-bootstrap.yaml`: repository bootstrap-resource binding for the reusable manifest contract owned by `agent-workflows:goal-brainstorm`; task artifacts themselves live only in `project-goals`.
 
 ## Commands
 

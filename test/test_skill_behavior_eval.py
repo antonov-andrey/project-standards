@@ -124,6 +124,33 @@ def test_corpus_load_resolves_working_directory(tmp_path: Path) -> None:
     assert case_list[0].semantic_invariant_list[0].id == "bounded"
 
 
+def test_case_selection_does_not_resolve_unselected_runtime_root(tmp_path: Path) -> None:
+    """A focused task-worktree eval must not require unrelated repository worktrees."""
+
+    module = _module_load()
+    repository = tmp_path / "repository"
+    _repository_create(repository)
+    corpus_root = repository / "skill_behavior_eval"
+    corpus_root.mkdir()
+    corpus_path = corpus_root / "corpus-v1.json"
+    _corpus_write(corpus_path)
+    payload = json.loads(corpus_path.read_text(encoding="utf-8"))
+    unavailable_case = dict(payload["case_list"][0])
+    unavailable_case["id"] = "case-unavailable"
+    unavailable_case["working_directory"] = "../../unavailable-repository"
+    payload["case_list"].append(unavailable_case)
+    corpus_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    selected = module._selected_case_list_get(
+        case_id_list=["case-a"],
+        corpus_path_list=[corpus_path],
+    )
+
+    assert [case.id for case in selected] == ["case-a"]
+    with pytest.raises(module.SkillBehaviorEvalError):
+        module._selected_case_list_get(case_id_list=[], corpus_path_list=[corpus_path])
+
+
 def test_corpus_load_rejects_boolean_schema_version(tmp_path: Path) -> None:
     """A boolean must not alias the integer version in the closed corpus schema."""
 
