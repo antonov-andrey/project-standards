@@ -44,6 +44,7 @@ def _corpus_write(path: Path, *, expected_skill_list: list[str] | None = None) -
                     {
                         "id": "case-a",
                         "working_directory": "..",
+                        "working_directory_mode": "same-branch",
                         "prompt": "Review one Python function.",
                         "expected_skill_list": expected_skill_list or ["project-standards:python-developer"],
                         "forbidden_skill_list": ["agent-workflows:code-audit"],
@@ -259,6 +260,7 @@ def test_working_directory_rejects_an_existing_direct_target_on_another_branch(
             corpus_path.resolve(),
             working_directory_value,
             context="wrong-branch direct target",
+            mode="same-branch",
         )
 
 
@@ -378,6 +380,42 @@ def test_corpus_load_rejects_a_sibling_without_the_same_branch_worktree(tmp_path
     corpus_path.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(module.SkillBehaviorEvalError, match="expected exactly one target worktree"):
+        module._corpus_case_list_load(corpus_path)
+
+
+def test_corpus_load_uses_an_explicit_clean_synchronized_main_dependency(tmp_path: Path) -> None:
+    """A non-participant target may use main only through its explicit closed policy."""
+
+    module = _module_load()
+    source_repository = tmp_path / "source"
+    target_repository = tmp_path / "target"
+    target_origin = tmp_path / "target-origin.git"
+    _repository_create(source_repository)
+    _repository_create(target_repository)
+    (target_repository / "domain").mkdir()
+    (target_repository / "domain" / "owner.py").write_text("VALUE = 1\n", encoding="utf-8")
+    _git_run(target_repository, ["add", "domain/owner.py"])
+    _git_run(target_repository, ["commit", "-m", "Add target owner"])
+    _git_run(tmp_path, ["init", "--bare", str(target_origin)])
+    _git_run(target_repository, ["remote", "add", "origin", str(target_origin)])
+    _git_run(target_repository, ["push", "--set-upstream", "origin", "main"])
+    task_branch = "2026-07-30-behavior-eval"
+    source_task_root = source_repository / ".worktree" / task_branch
+    _git_run(source_repository, ["worktree", "add", "-b", task_branch, str(source_task_root), "HEAD"])
+    corpus_root = source_task_root / "skill_behavior_eval"
+    corpus_root.mkdir()
+    corpus_path = corpus_root / "corpus-v1.json"
+    _corpus_write(corpus_path)
+    payload = json.loads(corpus_path.read_text(encoding="utf-8"))
+    payload["case_list"][0]["working_directory"] = "../../target/domain"
+    payload["case_list"][0]["working_directory_mode"] = "synchronized-main"
+    corpus_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    case = module._corpus_case_list_load(corpus_path)[0]
+
+    assert case.working_directory == (target_repository / "domain").resolve()
+    (target_repository / "dirty.txt").write_text("uncommitted\n", encoding="utf-8")
+    with pytest.raises(module.SkillBehaviorEvalError, match="target main worktree is not clean"):
         module._corpus_case_list_load(corpus_path)
 
 

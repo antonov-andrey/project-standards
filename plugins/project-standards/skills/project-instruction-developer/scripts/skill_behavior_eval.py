@@ -19,6 +19,7 @@ DEFAULT_MODEL = "gpt-5.6-sol"
 DEFAULT_REASONING_EFFORT = "medium"
 DEFAULT_TIMEOUT_SECONDS = 600
 SCHEMA_VERSION = 1
+WORKING_DIRECTORY_MODE_SET = {"same-branch", "synchronized-main"}
 
 _GENERATION_OUTPUT_SCHEMA: dict[str, Any] = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -404,8 +405,14 @@ def _working_directory_resolve(
     working_directory_value: str,
     *,
     context: str,
+    mode: str,
 ) -> Path:
-    """Resolve one corpus directory, including a sibling worktree on the same branch."""
+    """Resolve one corpus directory under its declared Git revision policy."""
+
+    if mode not in WORKING_DIRECTORY_MODE_SET:
+        raise SkillBehaviorEvalError(
+            f"{context}: working_directory_mode must be one of: {', '.join(sorted(WORKING_DIRECTORY_MODE_SET))}"
+        )
 
     raw_direct_candidate = resolved_corpus_path.parent / working_directory_value
     direct_candidate = raw_direct_candidate.resolve()
@@ -425,7 +432,7 @@ def _working_directory_resolve(
     ).strip()
     if not source_branch_ref.startswith("refs/heads/"):
         raise SkillBehaviorEvalError(f"{context}: corpus worktree has no local branch identity")
-    if direct_candidate.is_dir():
+    if direct_candidate.is_dir() and mode == "same-branch":
         direct_repository_root = _git_repository_root_get(
             direct_candidate,
             context=f"{context}: direct target is not inside a Git worktree",
@@ -486,6 +493,38 @@ def _working_directory_resolve(
         target_primary_root,
         context=f"{context}: cannot identify target Git owner",
     )
+    if mode == "synchronized-main":
+        target_worktree_record_list = _git_worktree_record_list_get(
+            target_primary_root,
+            context=f"{context}: cannot inspect target worktrees",
+        )
+        canonical_main_root = _registered_worktree_root_validate(
+            target_worktree_record_list[0]["worktree"],
+            expected_branch_ref="refs/heads/main",
+            expected_common_directory=target_common_directory,
+            context=f"{context}: synchronized target main worktree",
+        )
+        if canonical_main_root != target_primary_root:
+            raise SkillBehaviorEvalError(f"{context}: target path is not inside the canonical main worktree")
+        if _git_output_get(
+            canonical_main_root,
+            ["status", "--porcelain"],
+            context=f"{context}: cannot inspect target main state",
+        ):
+            raise SkillBehaviorEvalError(f"{context}: target main worktree is not clean")
+        local_commit = _git_output_get(
+            canonical_main_root,
+            ["rev-parse", "HEAD"],
+            context=f"{context}: cannot resolve target main commit",
+        ).strip()
+        upstream_commit = _git_output_get(
+            canonical_main_root,
+            ["rev-parse", "refs/remotes/origin/main"],
+            context=f"{context}: cannot resolve target origin/main commit",
+        ).strip()
+        if local_commit != upstream_commit:
+            raise SkillBehaviorEvalError(f"{context}: target main does not equal origin/main")
+        return primary_candidate
     matching_worktree_root_list = []
     for record in _git_worktree_record_list_get(
         target_primary_root,
@@ -569,6 +608,7 @@ def _corpus_case_list_load(
                 "prompt",
                 "semantic_invariant_list",
                 "working_directory",
+                "working_directory_mode",
             },
             context=case_context,
             required_key_set={
@@ -578,6 +618,7 @@ def _corpus_case_list_load(
                 "prompt",
                 "semantic_invariant_list",
                 "working_directory",
+                "working_directory_mode",
             },
         )
         expected_skill_list = _string_tuple_get(
@@ -602,6 +643,11 @@ def _corpus_case_list_load(
             context=case_context,
             field_name="working_directory",
         )
+        working_directory_mode = _non_empty_string_get(
+            raw_case,
+            context=case_context,
+            field_name="working_directory_mode",
+        )
         selected = selected_case_id_set is None or bool({case_id, f"{suite}:{case_id}"} & selected_case_id_set)
         prompt = _non_empty_string_get(raw_case, context=case_context, field_name="prompt")
         semantic_invariant_list = _semantic_invariant_tuple_get(raw_case, context=case_context)
@@ -611,6 +657,7 @@ def _corpus_case_list_load(
             resolved_corpus_path,
             working_directory_value,
             context=f"{case_context}.working_directory",
+            mode=working_directory_mode,
         )
         case_list.append(
             SkillBehaviorCase(
