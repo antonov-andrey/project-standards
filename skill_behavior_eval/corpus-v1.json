@@ -5,6 +5,7 @@
     {
       "id": "direct-simplified-technical-english",
       "working_directory": "..",
+      "working_directory_mode": "same-branch",
       "prompt": "In English, tell a new contributor how to run `pytest -q` in this repository and what to do if the test command fails. Do not run commands or change files.",
       "expected_skill_list": [
         "project-standards:project-foundation",
@@ -28,6 +29,7 @@
     {
       "id": "negative-russian-language-selection",
       "working_directory": "..",
+      "working_directory_mode": "same-branch",
       "prompt": "По-русски расскажи новому участнику, как запустить `pytest -q` в этом репозитории и что сделать, если тестовая команда завершится с ошибкой. Не запускай команды и не изменяй файлы.",
       "expected_skill_list": [
         "project-standards:project-foundation",
@@ -51,6 +53,7 @@
     {
       "id": "direct-aws-cloudformation",
       "working_directory": "..",
+      "working_directory_mode": "same-branch",
       "prompt": "Review a proposed CloudFormation change that adds an encrypted S3 bucket, Glue database, Lake Formation grants, and least-privilege IAM in the development AWS account. Explain the required implementation and verification boundaries.",
       "expected_skill_list": [
         "project-standards:project-foundation",
@@ -74,6 +77,7 @@
     {
       "id": "indirect-react-table",
       "working_directory": "..",
+      "working_directory_mode": "same-branch",
       "prompt": "A React admin table must gain server-side sorting, account-scoped theme persistence, and a non-destructive route error state. Give the minimal implementation contract without changing files.",
       "expected_skill_list": [
         "project-standards:project-foundation",
@@ -98,6 +102,7 @@
     {
       "id": "incomplete-rest-route",
       "working_directory": "..",
+      "working_directory_mode": "same-branch",
       "prompt": "We need a new FastAPI route for status information, but it is not yet clear whether it is a Product API route or an infrastructure health endpoint. Explain what must be established before implementation.",
       "expected_skill_list": [
         "project-standards:project-foundation",
@@ -121,6 +126,7 @@
     {
       "id": "negative-document-wording",
       "working_directory": "..",
+      "working_directory_mode": "same-branch",
       "prompt": "Improve the wording of one Russian paragraph in DESIGN.md without changing its meaning or any code.",
       "expected_skill_list": [
         "project-standards:project-foundation",
@@ -142,6 +148,7 @@
     {
       "id": "overlap-product-api-persistence-client",
       "working_directory": "..",
+      "working_directory_mode": "same-branch",
       "prompt": "Design a ZITADEL-authenticated Product API endpoint that persists a SQLAlchemy row and then invokes an idempotent outbound HTTP provider with bounded retries. Include tests for authorization and generated OpenAPI, transaction behavior, provider error classification, and retry edge cases, but do not implement it.",
       "expected_skill_list": [
         "project-standards:project-foundation",
@@ -174,6 +181,7 @@
     {
       "id": "overlap-workspace-standard-audit",
       "working_directory": "..",
+      "working_directory_mode": "same-branch",
       "prompt": "Semantically audit every governed repository under an explicit workspace root for complete required-standard bindings, project overlays, duplicated provider prose, and instruction owner boundaries. Include the deterministic inventory phase but do not modify repositories.",
       "expected_skill_list": [
         "project-standards:project-standard-audit"
@@ -195,6 +203,7 @@
     {
       "id": "indirect-docker-compose",
       "working_directory": "../../compose-mysql",
+      "working_directory_mode": "synchronized-main",
       "prompt": "Change the Compose service to use a pinned image, persistent named storage, a real readiness health check, explicit resource bounds, and safe exact cleanup. Give the implementation and verification contract without changing files.",
       "expected_skill_list": [
         "project-standards:project-foundation",
@@ -214,6 +223,7 @@
     {
       "id": "indirect-kubernetes",
       "working_directory": "../../workflow-control-center",
+      "working_directory_mode": "same-branch",
       "prompt": "Add a restart-resumable one-off Kubernetes Job with explicit service account, requests and limits, runtime Secret use, retained failure evidence, readiness-dependent completion, and cleanup after success. Give the required implementation and live verification boundaries without changing files.",
       "expected_skill_list": [
         "project-standards:project-foundation",
@@ -233,6 +243,7 @@
     {
       "id": "indirect-legacy-python",
       "working_directory": "../../scrapy-next-deprecated",
+      "working_directory_mode": "synchronized-main",
       "prompt": "Fix a contained bug inside an existing Python root classified as Legacy, preserving its current owner boundary and behavior. Do not migrate or modernize its repository structure. Explain the scoped approach without changing files.",
       "expected_skill_list": [
         "project-standards:project-foundation",
@@ -252,6 +263,7 @@
     {
       "id": "overlap-python-cli-config-logging",
       "working_directory": "../../workflow-control-center",
+      "working_directory_mode": "same-branch",
       "prompt": "Add a directly executable Python CLI that reads ordinary options from generated environment bindings, keeps a secret environment-only, loads dotenv once from the explicit project root, initializes shared logging once without creating or injecting logger objects, exposes --help through normal startup, and has a bounded --test mode. Give the implementation and verification contract without changing files.",
       "expected_skill_list": [
         "project-standards:project-foundation",
@@ -278,6 +290,7 @@
     {
       "id": "indirect-vcs-dependency",
       "working_directory": "../../workflow-control-center",
+      "working_directory_mode": "same-branch",
       "prompt": "Update requirements-dev.txt to consume the current project-standards distribution directly from its GitHub repository. Give the exact dependency line and governing revision policy without changing files.",
       "expected_skill_list": [
         "project-standards:project-foundation"
@@ -296,6 +309,7 @@
     {
       "id": "negative-explicit-audits",
       "working_directory": "..",
+      "working_directory_mode": "same-branch",
       "prompt": "Read the current skill descriptions and summarize which engineering areas they cover. Do not run an audit workflow, produce a report artifact, or change files.",
       "expected_skill_list": [
         "project-standards:project-foundation",
@@ -322,6 +336,7 @@
     {
       "id": "indirect-python-orchestration-ownership",
       "working_directory": "../../workflow-control-center",
+      "working_directory_mode": "same-branch",
       "prompt": "Review a proposed change that adds S3 artifact cleanup, SQL lifecycle state, image publication, and retry policy directly to an existing Python deployment coordinator. Explain the required ownership refactor and semantic verification without changing files.",
       "expected_skill_list": [
         "project-standards:project-foundation",

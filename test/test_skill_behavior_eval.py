@@ -18,6 +18,7 @@ SCRIPT_PATH = (
     Path(__file__).resolve().parents[1]
     / "plugins/project-standards/skills/project-instruction-developer/scripts/skill_behavior_eval.py"
 )
+CORPUS_PATH = Path(__file__).resolve().parents[1] / "skill_behavior_eval/corpus-v1.json"
 
 
 def _module_load() -> ModuleType:
@@ -105,6 +106,23 @@ def _separate_git_directory_repository_create(repository: Path, git_directory: P
     (repository / "README.md").write_text("baseline\n", encoding="utf-8")
     _git_run(repository, ["add", "README.md"])
     _git_run(repository, ["commit", "-m", "Initial test state"])
+
+
+def test_bundled_corpus_declares_each_working_directory_revision_policy() -> None:
+    """The provider corpus must remain valid under its own closed case schema."""
+
+    case_list = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))["case_list"]
+    synchronized_main_directory_set = {
+        "../../compose-mysql",
+        "../../scrapy-next-deprecated",
+    }
+
+    assert case_list
+    assert all(
+        case["working_directory_mode"]
+        == ("synchronized-main" if case["working_directory"] in synchronized_main_directory_set else "same-branch")
+        for case in case_list
+    )
 
 
 def test_corpus_load_resolves_working_directory(tmp_path: Path) -> None:
