@@ -44,10 +44,8 @@ def _corpus_write(path: Path, *, expected_skill_list: list[str] | None = None) -
                     {
                         "id": "case-a",
                         "working_directory": "..",
-                        "working_directory_mode": "same-branch",
                         "prompt": "Review one Python function.",
-                        "expected_skill_list": expected_skill_list
-                        or ["project-standards:python-developer"],
+                        "expected_skill_list": expected_skill_list or ["project-standards:python-developer"],
                         "forbidden_skill_list": ["agent-workflows:code-audit"],
                         "semantic_invariant_list": [
                             {
@@ -88,9 +86,7 @@ def _repository_create(repository: Path) -> None:
     _git_run(repository, ["commit", "-m", "Initial test state"])
 
 
-def _separate_git_directory_repository_create(
-    repository: Path, git_directory: Path
-) -> None:
+def _separate_git_directory_repository_create(repository: Path, git_directory: Path) -> None:
     """Create one main worktree whose Git administration lives elsewhere."""
 
     _git_run(
@@ -128,9 +124,7 @@ def test_corpus_load_resolves_working_directory(tmp_path: Path) -> None:
     assert case_list[0].semantic_invariant_list[0].id == "bounded"
 
 
-def test_case_selection_does_not_resolve_unselected_runtime_root(
-    tmp_path: Path,
-) -> None:
+def test_case_selection_does_not_resolve_unselected_runtime_root(tmp_path: Path) -> None:
     """A focused task-worktree eval must not require unrelated repository worktrees."""
 
     module = _module_load()
@@ -167,9 +161,7 @@ def test_corpus_load_rejects_boolean_schema_version(tmp_path: Path) -> None:
     payload["schema_version"] = True
     corpus_path.write_text(json.dumps(payload), encoding="utf-8")
 
-    with pytest.raises(
-        module.SkillBehaviorEvalError, match="schema_version must equal 1"
-    ):
+    with pytest.raises(module.SkillBehaviorEvalError, match="schema_version must equal 1"):
         module._corpus_case_list_load(corpus_path)
 
 
@@ -184,9 +176,7 @@ def test_git_discovery_ignores_inherited_repository_redirection(
     sentinel_repository = tmp_path / "sentinel"
     _repository_create(intended_repository)
     _repository_create(sentinel_repository)
-    (intended_repository / "README.md").write_text(
-        "intended dirty state\n", encoding="utf-8"
-    )
+    (intended_repository / "README.md").write_text("intended dirty state\n", encoding="utf-8")
     injected_config_path = tmp_path / "injected.gitconfig"
     injected_config_path.write_text(
         f"[core]\n\tworktree = {sentinel_repository}\n",
@@ -252,10 +242,7 @@ def test_working_directory_rejects_an_existing_direct_target_on_another_branch(
     _repository_create(target_repository)
     task_branch = "2026-07-30-behavior-eval"
     source_task_root = source_repository / ".worktree" / task_branch
-    _git_run(
-        source_repository,
-        ["worktree", "add", "-b", task_branch, str(source_task_root), "HEAD"],
-    )
+    _git_run(source_repository, ["worktree", "add", "-b", task_branch, str(source_task_root), "HEAD"])
     corpus_root = source_task_root / "skill_behavior_eval"
     corpus_root.mkdir()
     corpus_path = corpus_root / "corpus-v1.json"
@@ -267,20 +254,15 @@ def test_working_directory_rejects_an_existing_direct_target_on_another_branch(
         direct_link.symlink_to(target_repository, target_is_directory=True)
         working_directory_value = "target-link"
 
-    with pytest.raises(
-        module.SkillBehaviorEvalError, match="does not match corpus branch"
-    ):
+    with pytest.raises(module.SkillBehaviorEvalError, match="does not match corpus branch"):
         module._working_directory_resolve(
             corpus_path.resolve(),
             working_directory_value,
             context="wrong-branch direct target",
-            mode="same-branch",
         )
 
 
-def test_corpus_load_maps_a_sibling_repository_to_the_same_branch_worktree(
-    tmp_path: Path,
-) -> None:
+def test_corpus_load_maps_a_sibling_repository_to_the_same_branch_worktree(tmp_path: Path) -> None:
     """A linked-worktree corpus must not resolve a sibling case back to main."""
 
     module = _module_load()
@@ -291,14 +273,8 @@ def test_corpus_load_maps_a_sibling_repository_to_the_same_branch_worktree(
     task_branch = "2026-07-30-behavior-eval"
     source_task_root = source_repository / ".worktree" / task_branch
     target_task_root = target_repository / ".worktree" / task_branch
-    _git_run(
-        source_repository,
-        ["worktree", "add", "-b", task_branch, str(source_task_root), "HEAD"],
-    )
-    _git_run(
-        target_repository,
-        ["worktree", "add", "-b", task_branch, str(target_task_root), "HEAD"],
-    )
+    _git_run(source_repository, ["worktree", "add", "-b", task_branch, str(source_task_root), "HEAD"])
+    _git_run(target_repository, ["worktree", "add", "-b", task_branch, str(target_task_root), "HEAD"])
     corpus_root = source_task_root / "skill_behavior_eval"
     corpus_root.mkdir()
     corpus_path = corpus_root / "corpus-v1.json"
@@ -313,9 +289,7 @@ def test_corpus_load_maps_a_sibling_repository_to_the_same_branch_worktree(
     assert _git_run(case.working_directory, ["branch", "--show-current"]) == task_branch
 
 
-def test_corpus_load_rejects_a_same_branch_subdirectory_symbolic_escape(
-    tmp_path: Path,
-) -> None:
+def test_corpus_load_rejects_a_same_branch_subdirectory_symbolic_escape(tmp_path: Path) -> None:
     """A target subdirectory must remain physically inside the selected worktree."""
 
     module = _module_load()
@@ -325,22 +299,14 @@ def test_corpus_load_rejects_a_same_branch_subdirectory_symbolic_escape(
     _repository_create(source_repository)
     _repository_create(target_repository)
     (target_repository / "subdir").mkdir()
-    (target_repository / "subdir" / "tracked.txt").write_text(
-        "tracked\n", encoding="utf-8"
-    )
+    (target_repository / "subdir" / "tracked.txt").write_text("tracked\n", encoding="utf-8")
     _git_run(target_repository, ["add", "subdir/tracked.txt"])
     _git_run(target_repository, ["commit", "-m", "Add target subdirectory"])
     task_branch = "2026-07-30-behavior-eval"
     source_task_root = source_repository / ".worktree" / task_branch
     target_task_root = target_repository / ".worktree" / task_branch
-    _git_run(
-        source_repository,
-        ["worktree", "add", "-b", task_branch, str(source_task_root), "HEAD"],
-    )
-    _git_run(
-        target_repository,
-        ["worktree", "add", "-b", task_branch, str(target_task_root), "HEAD"],
-    )
+    _git_run(source_repository, ["worktree", "add", "-b", task_branch, str(source_task_root), "HEAD"])
+    _git_run(target_repository, ["worktree", "add", "-b", task_branch, str(target_task_root), "HEAD"])
     corpus_root = source_task_root / "skill_behavior_eval"
     corpus_root.mkdir()
     corpus_path = corpus_root / "corpus-v1.json"
@@ -351,17 +317,13 @@ def test_corpus_load_rejects_a_same_branch_subdirectory_symbolic_escape(
     external_directory.mkdir()
     (target_task_root / "subdir" / "tracked.txt").unlink()
     (target_task_root / "subdir").rmdir()
-    (target_task_root / "subdir").symlink_to(
-        external_directory, target_is_directory=True
-    )
+    (target_task_root / "subdir").symlink_to(external_directory, target_is_directory=True)
 
     with pytest.raises(module.SkillBehaviorEvalError, match="escapes its worktree"):
         module._corpus_case_list_load(corpus_path)
 
 
-def test_corpus_load_rejects_a_symbolically_replaced_registered_worktree(
-    tmp_path: Path,
-) -> None:
+def test_corpus_load_rejects_a_symbolically_replaced_registered_worktree(tmp_path: Path) -> None:
     """A stale registered path cannot redirect selection to an unrelated repository."""
 
     module = _module_load()
@@ -375,14 +337,8 @@ def test_corpus_load_rejects_a_symbolically_replaced_registered_worktree(
     source_task_root = source_repository / ".worktree" / task_branch
     target_task_root = target_repository / ".worktree" / task_branch
     unrelated_task_root = unrelated_repository / ".worktree" / task_branch
-    _git_run(
-        source_repository,
-        ["worktree", "add", "-b", task_branch, str(source_task_root), "HEAD"],
-    )
-    _git_run(
-        target_repository,
-        ["worktree", "add", "-b", task_branch, str(target_task_root), "HEAD"],
-    )
+    _git_run(source_repository, ["worktree", "add", "-b", task_branch, str(source_task_root), "HEAD"])
+    _git_run(target_repository, ["worktree", "add", "-b", task_branch, str(target_task_root), "HEAD"])
     _git_run(
         unrelated_repository,
         ["worktree", "add", "-b", task_branch, str(unrelated_task_root), "HEAD"],
@@ -398,15 +354,11 @@ def test_corpus_load_rejects_a_symbolically_replaced_registered_worktree(
     target_task_root.rename(displaced_target_root)
     target_task_root.symlink_to(unrelated_task_root, target_is_directory=True)
 
-    with pytest.raises(
-        module.SkillBehaviorEvalError, match="not one physical directory"
-    ):
+    with pytest.raises(module.SkillBehaviorEvalError, match="not one physical directory"):
         module._corpus_case_list_load(corpus_path)
 
 
-def test_corpus_load_rejects_a_sibling_without_the_same_branch_worktree(
-    tmp_path: Path,
-) -> None:
+def test_corpus_load_rejects_a_sibling_without_the_same_branch_worktree(tmp_path: Path) -> None:
     """A cross-repository case must never silently execute in the target main worktree."""
 
     module = _module_load()
@@ -416,10 +368,7 @@ def test_corpus_load_rejects_a_sibling_without_the_same_branch_worktree(
     _repository_create(target_repository)
     task_branch = "2026-07-30-behavior-eval"
     source_task_root = source_repository / ".worktree" / task_branch
-    _git_run(
-        source_repository,
-        ["worktree", "add", "-b", task_branch, str(source_task_root), "HEAD"],
-    )
+    _git_run(source_repository, ["worktree", "add", "-b", task_branch, str(source_task_root), "HEAD"])
     corpus_root = source_task_root / "skill_behavior_eval"
     corpus_root.mkdir()
     corpus_path = corpus_root / "corpus-v1.json"
@@ -428,54 +377,7 @@ def test_corpus_load_rejects_a_sibling_without_the_same_branch_worktree(
     payload["case_list"][0]["working_directory"] = "../../target"
     corpus_path.write_text(json.dumps(payload), encoding="utf-8")
 
-    with pytest.raises(
-        module.SkillBehaviorEvalError, match="expected exactly one target worktree"
-    ):
-        module._corpus_case_list_load(corpus_path)
-
-
-def test_corpus_load_uses_an_explicit_clean_synchronized_main_dependency(
-    tmp_path: Path,
-) -> None:
-    """A non-participant target may use main only through its explicit closed policy."""
-
-    module = _module_load()
-    source_repository = tmp_path / "source"
-    target_repository = tmp_path / "target"
-    target_origin = tmp_path / "target-origin.git"
-    _repository_create(source_repository)
-    _repository_create(target_repository)
-    (target_repository / "domain").mkdir()
-    (target_repository / "domain" / "owner.py").write_text(
-        "VALUE = 1\n", encoding="utf-8"
-    )
-    _git_run(target_repository, ["add", "domain/owner.py"])
-    _git_run(target_repository, ["commit", "-m", "Add target owner"])
-    _git_run(tmp_path, ["init", "--bare", str(target_origin)])
-    _git_run(target_repository, ["remote", "add", "origin", str(target_origin)])
-    _git_run(target_repository, ["push", "--set-upstream", "origin", "main"])
-    task_branch = "2026-07-30-behavior-eval"
-    source_task_root = source_repository / ".worktree" / task_branch
-    _git_run(
-        source_repository,
-        ["worktree", "add", "-b", task_branch, str(source_task_root), "HEAD"],
-    )
-    corpus_root = source_task_root / "skill_behavior_eval"
-    corpus_root.mkdir()
-    corpus_path = corpus_root / "corpus-v1.json"
-    _corpus_write(corpus_path)
-    payload = json.loads(corpus_path.read_text(encoding="utf-8"))
-    payload["case_list"][0]["working_directory"] = "../../target/domain"
-    payload["case_list"][0]["working_directory_mode"] = "synchronized-main"
-    corpus_path.write_text(json.dumps(payload), encoding="utf-8")
-
-    case = module._corpus_case_list_load(corpus_path)[0]
-
-    assert case.working_directory == (target_repository / "domain").resolve()
-    (target_repository / "dirty.txt").write_text("uncommitted\n", encoding="utf-8")
-    with pytest.raises(
-        module.SkillBehaviorEvalError, match="target main worktree is not clean"
-    ):
+    with pytest.raises(module.SkillBehaviorEvalError, match="expected exactly one target worktree"):
         module._corpus_case_list_load(corpus_path)
 
 
@@ -488,14 +390,10 @@ def test_corpus_load_rejects_activation_overlap(tmp_path: Path) -> None:
     corpus_path = corpus_root / "corpus-v1.json"
     _corpus_write(corpus_path)
     payload = json.loads(corpus_path.read_text(encoding="utf-8"))
-    payload["case_list"][0]["forbidden_skill_list"] = [
-        "project-standards:python-developer"
-    ]
+    payload["case_list"][0]["forbidden_skill_list"] = ["project-standards:python-developer"]
     corpus_path.write_text(json.dumps(payload), encoding="utf-8")
 
-    with pytest.raises(
-        module.SkillBehaviorEvalError, match="expected and forbidden skills overlap"
-    ):
+    with pytest.raises(module.SkillBehaviorEvalError, match="expected and forbidden skills overlap"):
         module._corpus_case_list_load(corpus_path)
 
 
@@ -519,15 +417,10 @@ def test_git_repository_root_preserves_non_utf8_filesystem_text(tmp_path: Path) 
     repository = Path(os.fsdecode(os.fsencode(tmp_path) + b"/repository-\xff"))
     initial_repository.rename(repository)
 
-    assert (
-        module._git_repository_root_get(repository, context="non-UTF-8 root")
-        == repository.resolve()
-    )
+    assert module._git_repository_root_get(repository, context="non-UTF-8 root") == repository.resolve()
 
 
-def test_case_evaluate_combines_activation_and_independent_judge(
-    tmp_path: Path,
-) -> None:
+def test_case_evaluate_combines_activation_and_independent_judge(tmp_path: Path) -> None:
     """Case success should require expected activation and every semantic invariant."""
 
     module = _module_load()
@@ -586,9 +479,7 @@ def test_case_evaluate_combines_activation_and_independent_judge(
     assert "Do not use keyword" in call_list[1]["prompt"]
 
 
-def test_case_evaluate_reports_missing_and_forbidden_activations(
-    tmp_path: Path,
-) -> None:
+def test_case_evaluate_reports_missing_and_forbidden_activations(tmp_path: Path) -> None:
     """Activation failures should be independent from a passing semantic judge."""
 
     module = _module_load()
@@ -631,9 +522,7 @@ def test_case_evaluate_reports_missing_and_forbidden_activations(
     assert result.forbidden_activated_skill_list == ("agent-workflows:code-audit",)
 
 
-def test_activation_normalization_requires_one_unambiguous_provider_identity(
-    tmp_path: Path,
-) -> None:
+def test_activation_normalization_requires_one_unambiguous_provider_identity(tmp_path: Path) -> None:
     """A short self-report should canonicalize only against one exact case identity."""
 
     module = _module_load()
@@ -657,14 +546,10 @@ def test_activation_normalization_requires_one_unambiguous_provider_identity(
         suite=case.suite,
         working_directory=case.working_directory,
     )
-    assert module._activated_skill_tuple_normalize(["shared"], case=ambiguous_case) == (
-        "shared",
-    )
+    assert module._activated_skill_tuple_normalize(["shared"], case=ambiguous_case) == ("shared",)
 
 
-def test_case_list_evaluate_preserves_corpus_order(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_case_list_evaluate_preserves_corpus_order(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Concurrent completion order must not change the serialized corpus order."""
 
     module = _module_load()

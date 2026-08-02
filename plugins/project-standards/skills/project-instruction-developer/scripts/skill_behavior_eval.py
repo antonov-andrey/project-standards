@@ -19,7 +19,6 @@ DEFAULT_MODEL = "gpt-5.6-sol"
 DEFAULT_REASONING_EFFORT = "medium"
 DEFAULT_TIMEOUT_SECONDS = 600
 SCHEMA_VERSION = 1
-WORKING_DIRECTORY_MODE_SET = {"same-branch", "synchronized-main"}
 
 _GENERATION_OUTPUT_SCHEMA: dict[str, Any] = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -203,43 +202,29 @@ def _exact_key_set_validate(
     missing_key_set = required_key_set - set(payload)
     unknown_key_set = set(payload) - allowed_key_set
     if missing_key_set:
-        raise SkillBehaviorEvalError(
-            f"{context}: missing fields: {', '.join(sorted(missing_key_set))}"
-        )
+        raise SkillBehaviorEvalError(f"{context}: missing fields: {', '.join(sorted(missing_key_set))}")
     if unknown_key_set:
-        raise SkillBehaviorEvalError(
-            f"{context}: unknown fields: {', '.join(sorted(unknown_key_set))}"
-        )
+        raise SkillBehaviorEvalError(f"{context}: unknown fields: {', '.join(sorted(unknown_key_set))}")
 
 
-def _non_empty_string_get(
-    payload: dict[str, Any], *, context: str, field_name: str
-) -> str:
+def _non_empty_string_get(payload: dict[str, Any], *, context: str, field_name: str) -> str:
     """Return one validated non-empty string field."""
 
     value = payload.get(field_name)
     if not isinstance(value, str) or not value.strip():
-        raise SkillBehaviorEvalError(
-            f"{context}.{field_name}: expected non-empty string"
-        )
+        raise SkillBehaviorEvalError(f"{context}.{field_name}: expected non-empty string")
     return value.strip()
 
 
-def _string_tuple_get(
-    payload: dict[str, Any], *, context: str, field_name: str
-) -> tuple[str, ...]:
+def _string_tuple_get(payload: dict[str, Any], *, context: str, field_name: str) -> tuple[str, ...]:
     """Return one validated unique string-list field."""
 
     value = payload.get(field_name)
-    if not isinstance(value, list) or any(
-        not isinstance(item, str) or not item.strip() for item in value
-    ):
+    if not isinstance(value, list) or any(not isinstance(item, str) or not item.strip() for item in value):
         raise SkillBehaviorEvalError(f"{context}.{field_name}: expected string list")
     normalized_value_list = [item.strip() for item in value]
     if len(normalized_value_list) != len(set(normalized_value_list)):
-        raise SkillBehaviorEvalError(
-            f"{context}.{field_name}: duplicate values are forbidden"
-        )
+        raise SkillBehaviorEvalError(f"{context}.{field_name}: duplicate values are forbidden")
     return tuple(normalized_value_list)
 
 
@@ -252,9 +237,7 @@ def _semantic_invariant_tuple_get(
 
     raw_invariant_list = payload.get("semantic_invariant_list")
     if not isinstance(raw_invariant_list, list) or not raw_invariant_list:
-        raise SkillBehaviorEvalError(
-            f"{context}.semantic_invariant_list: expected non-empty object list"
-        )
+        raise SkillBehaviorEvalError(f"{context}.semantic_invariant_list: expected non-empty object list")
     invariant_list: list[SemanticInvariant] = []
     for index, raw_invariant in enumerate(raw_invariant_list):
         invariant_context = f"{context}.semantic_invariant_list[{index}]"
@@ -268,25 +251,17 @@ def _semantic_invariant_tuple_get(
         )
         invariant_list.append(
             SemanticInvariant(
-                id=_non_empty_string_get(
-                    raw_invariant, context=invariant_context, field_name="id"
-                ),
-                text=_non_empty_string_get(
-                    raw_invariant, context=invariant_context, field_name="text"
-                ),
+                id=_non_empty_string_get(raw_invariant, context=invariant_context, field_name="id"),
+                text=_non_empty_string_get(raw_invariant, context=invariant_context, field_name="text"),
             )
         )
     invariant_id_list = [invariant.id for invariant in invariant_list]
     if len(invariant_id_list) != len(set(invariant_id_list)):
-        raise SkillBehaviorEvalError(
-            f"{context}.semantic_invariant_list: duplicate ids are forbidden"
-        )
+        raise SkillBehaviorEvalError(f"{context}.semantic_invariant_list: duplicate ids are forbidden")
     return tuple(invariant_list)
 
 
-def _git_output_get(
-    repository_root: Path, argument_list: list[str], *, context: str
-) -> str:
+def _git_output_get(repository_root: Path, argument_list: list[str], *, context: str) -> str:
     """Return checked Git output for one repository-local discovery command."""
 
     environment_by_name_map = os.environ.copy()
@@ -322,9 +297,7 @@ def _git_output_get(
         errors="surrogateescape",
     )
     if result.returncode != 0:
-        raise SkillBehaviorEvalError(
-            f"{context}: Git command failed: {result.stderr.strip()}"
-        )
+        raise SkillBehaviorEvalError(f"{context}: Git command failed: {result.stderr.strip()}")
     return result.stdout
 
 
@@ -337,9 +310,7 @@ def _git_repository_root_get(path: Path, *, context: str) -> Path:
         context=context,
     ).strip()
     if not root_text:
-        raise SkillBehaviorEvalError(
-            f"{context}: Git returned an empty repository root"
-        )
+        raise SkillBehaviorEvalError(f"{context}: Git returned an empty repository root")
     return Path(root_text).resolve()
 
 
@@ -369,15 +340,11 @@ def _registered_worktree_root_validate(
 
     worktree_path = Path(raw_worktree_path)
     if worktree_path.is_symlink() or not worktree_path.is_dir():
-        raise SkillBehaviorEvalError(
-            f"{context}: registered worktree is not one physical directory: {worktree_path}"
-        )
+        raise SkillBehaviorEvalError(f"{context}: registered worktree is not one physical directory: {worktree_path}")
     absolute_worktree_path = Path(os.path.abspath(worktree_path))
     resolved_worktree_root = worktree_path.resolve()
     if absolute_worktree_path != resolved_worktree_root:
-        raise SkillBehaviorEvalError(
-            f"{context}: registered worktree path traverses a symbolic link: {worktree_path}"
-        )
+        raise SkillBehaviorEvalError(f"{context}: registered worktree path traverses a symbolic link: {worktree_path}")
     if (
         _git_repository_root_get(
             resolved_worktree_root,
@@ -390,9 +357,7 @@ def _registered_worktree_root_validate(
         )
         != expected_common_directory
     ):
-        raise SkillBehaviorEvalError(
-            f"{context}: registered worktree Git identity is inconsistent: {worktree_path}"
-        )
+        raise SkillBehaviorEvalError(f"{context}: registered worktree Git identity is inconsistent: {worktree_path}")
     if expected_branch_ref is not None:
         actual_branch_ref = _git_output_get(
             resolved_worktree_root,
@@ -401,15 +366,12 @@ def _registered_worktree_root_validate(
         ).strip()
         if actual_branch_ref != expected_branch_ref:
             raise SkillBehaviorEvalError(
-                f"{context}: registered worktree branch is inconsistent: "
-                f"{resolved_worktree_root}"
+                f"{context}: registered worktree branch is inconsistent: " f"{resolved_worktree_root}"
             )
     return resolved_worktree_root
 
 
-def _git_worktree_record_list_get(
-    repository_root: Path, *, context: str
-) -> list[dict[str, str]]:
+def _git_worktree_record_list_get(repository_root: Path, *, context: str) -> list[dict[str, str]]:
     """Return NUL-safe Git worktree records."""
 
     output = _git_output_get(
@@ -423,9 +385,7 @@ def _git_worktree_record_list_get(
         if not item:
             if current_record:
                 if "worktree" not in current_record:
-                    raise SkillBehaviorEvalError(
-                        f"{context}: worktree record has no path"
-                    )
+                    raise SkillBehaviorEvalError(f"{context}: worktree record has no path")
                 record_list.append(current_record)
                 current_record = {}
             continue
@@ -444,14 +404,8 @@ def _working_directory_resolve(
     working_directory_value: str,
     *,
     context: str,
-    mode: str,
 ) -> Path:
-    """Resolve one corpus directory under its declared Git revision policy."""
-
-    if mode not in WORKING_DIRECTORY_MODE_SET:
-        raise SkillBehaviorEvalError(
-            f"{context}: working_directory_mode must be one of: {', '.join(sorted(WORKING_DIRECTORY_MODE_SET))}"
-        )
+    """Resolve one corpus directory, including a sibling worktree on the same branch."""
 
     raw_direct_candidate = resolved_corpus_path.parent / working_directory_value
     direct_candidate = raw_direct_candidate.resolve()
@@ -470,10 +424,8 @@ def _working_directory_resolve(
         context=f"{context}: corpus worktree must use one branch",
     ).strip()
     if not source_branch_ref.startswith("refs/heads/"):
-        raise SkillBehaviorEvalError(
-            f"{context}: corpus worktree has no local branch identity"
-        )
-    if direct_candidate.is_dir() and mode == "same-branch":
+        raise SkillBehaviorEvalError(f"{context}: corpus worktree has no local branch identity")
+    if direct_candidate.is_dir():
         direct_repository_root = _git_repository_root_get(
             direct_candidate,
             context=f"{context}: direct target is not inside a Git worktree",
@@ -490,8 +442,7 @@ def _working_directory_resolve(
             )
         if Path(os.path.abspath(raw_direct_candidate)) != direct_candidate:
             raise SkillBehaviorEvalError(
-                f"{context}: direct target path traverses a symbolic link: "
-                f"{raw_direct_candidate}"
+                f"{context}: direct target path traverses a symbolic link: " f"{raw_direct_candidate}"
             )
         return direct_candidate
 
@@ -512,17 +463,12 @@ def _working_directory_resolve(
     try:
         corpus_relative_path = resolved_corpus_path.relative_to(source_repository_root)
     except ValueError as exc:
-        raise SkillBehaviorEvalError(
-            f"{context}: corpus path escapes its current worktree"
-        ) from exc
-    raw_primary_candidate = (
-        primary_repository_root / corpus_relative_path.parent / working_directory_value
-    )
+        raise SkillBehaviorEvalError(f"{context}: corpus path escapes its current worktree") from exc
+    raw_primary_candidate = primary_repository_root / corpus_relative_path.parent / working_directory_value
     primary_candidate = raw_primary_candidate.resolve()
     if Path(os.path.abspath(raw_primary_candidate)) != primary_candidate:
         raise SkillBehaviorEvalError(
-            f"{context}: primary-layout target path traverses a symbolic link: "
-            f"{raw_primary_candidate}"
+            f"{context}: primary-layout target path traverses a symbolic link: " f"{raw_primary_candidate}"
         )
     if not primary_candidate.is_dir():
         raise SkillBehaviorEvalError(
@@ -535,51 +481,11 @@ def _working_directory_resolve(
     try:
         target_relative_path = primary_candidate.relative_to(target_primary_root)
     except ValueError as exc:
-        raise SkillBehaviorEvalError(
-            f"{context}: target directory escapes its primary repository"
-        ) from exc
+        raise SkillBehaviorEvalError(f"{context}: target directory escapes its primary repository") from exc
     target_common_directory = _git_common_directory_get(
         target_primary_root,
         context=f"{context}: cannot identify target Git owner",
     )
-    if mode == "synchronized-main":
-        target_worktree_record_list = _git_worktree_record_list_get(
-            target_primary_root,
-            context=f"{context}: cannot inspect target worktrees",
-        )
-        canonical_main_root = _registered_worktree_root_validate(
-            target_worktree_record_list[0]["worktree"],
-            expected_branch_ref="refs/heads/main",
-            expected_common_directory=target_common_directory,
-            context=f"{context}: synchronized target main worktree",
-        )
-        if canonical_main_root != target_primary_root:
-            raise SkillBehaviorEvalError(
-                f"{context}: target path is not inside the canonical main worktree"
-            )
-        if _git_output_get(
-            canonical_main_root,
-            ["status", "--porcelain"],
-            context=f"{context}: cannot inspect target main state",
-        ):
-            raise SkillBehaviorEvalError(
-                f"{context}: target main worktree is not clean"
-            )
-        local_commit = _git_output_get(
-            canonical_main_root,
-            ["rev-parse", "HEAD"],
-            context=f"{context}: cannot resolve target main commit",
-        ).strip()
-        upstream_commit = _git_output_get(
-            canonical_main_root,
-            ["rev-parse", "refs/remotes/origin/main"],
-            context=f"{context}: cannot resolve target origin/main commit",
-        ).strip()
-        if local_commit != upstream_commit:
-            raise SkillBehaviorEvalError(
-                f"{context}: target main does not equal origin/main"
-            )
-        return primary_candidate
     matching_worktree_root_list = []
     for record in _git_worktree_record_list_get(
         target_primary_root,
@@ -600,15 +506,12 @@ def _working_directory_resolve(
             f"{context}: expected exactly one target worktree on {source_branch_ref}, "
             f"found {len(matching_worktree_root_list)}"
         )
-    same_branch_candidate = (
-        matching_worktree_root_list[0] / target_relative_path
-    ).resolve()
+    same_branch_candidate = (matching_worktree_root_list[0] / target_relative_path).resolve()
     try:
         same_branch_candidate.relative_to(matching_worktree_root_list[0])
     except ValueError as exc:
         raise SkillBehaviorEvalError(
-            f"{context}: same-branch target path escapes its worktree: "
-            f"{same_branch_candidate}"
+            f"{context}: same-branch target path escapes its worktree: " f"{same_branch_candidate}"
         ) from exc
     if (
         not same_branch_candidate.is_dir()
@@ -618,9 +521,7 @@ def _working_directory_resolve(
         )
         != matching_worktree_root_list[0]
     ):
-        raise SkillBehaviorEvalError(
-            f"{context}: same-branch target path is not a directory: {same_branch_candidate}"
-        )
+        raise SkillBehaviorEvalError(f"{context}: same-branch target path is not a directory: {same_branch_candidate}")
     return same_branch_candidate
 
 
@@ -635,34 +536,23 @@ def _corpus_case_list_load(
     try:
         payload = json.loads(resolved_corpus_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise SkillBehaviorEvalError(
-            f"{resolved_corpus_path}: cannot load corpus: {exc}"
-        ) from exc
+        raise SkillBehaviorEvalError(f"{resolved_corpus_path}: cannot load corpus: {exc}") from exc
     if not isinstance(payload, dict):
-        raise SkillBehaviorEvalError(
-            f"{resolved_corpus_path}: corpus root must be an object"
-        )
+        raise SkillBehaviorEvalError(f"{resolved_corpus_path}: corpus root must be an object")
     _exact_key_set_validate(
         payload,
         allowed_key_set={"case_list", "schema_version", "suite"},
         context=str(resolved_corpus_path),
         required_key_set={"case_list", "schema_version", "suite"},
     )
-    if (
-        type(payload["schema_version"]) is not int
-        or payload["schema_version"] != SCHEMA_VERSION
-    ):
+    if type(payload["schema_version"]) is not int or payload["schema_version"] != SCHEMA_VERSION:
         raise SkillBehaviorEvalError(
             f"{resolved_corpus_path}: schema_version must equal {SCHEMA_VERSION}, got {payload['schema_version']!r}"
         )
-    suite = _non_empty_string_get(
-        payload, context=str(resolved_corpus_path), field_name="suite"
-    )
+    suite = _non_empty_string_get(payload, context=str(resolved_corpus_path), field_name="suite")
     raw_case_list = payload["case_list"]
     if not isinstance(raw_case_list, list) or not raw_case_list:
-        raise SkillBehaviorEvalError(
-            f"{resolved_corpus_path}.case_list: expected non-empty object list"
-        )
+        raise SkillBehaviorEvalError(f"{resolved_corpus_path}.case_list: expected non-empty object list")
 
     case_list: list[SkillBehaviorCase] = []
     corpus_case_id_list: list[str] = []
@@ -679,7 +569,6 @@ def _corpus_case_list_load(
                 "prompt",
                 "semantic_invariant_list",
                 "working_directory",
-                "working_directory_mode",
             },
             context=case_context,
             required_key_set={
@@ -689,7 +578,6 @@ def _corpus_case_list_load(
                 "prompt",
                 "semantic_invariant_list",
                 "working_directory",
-                "working_directory_mode",
             },
         )
         expected_skill_list = _string_tuple_get(
@@ -714,27 +602,15 @@ def _corpus_case_list_load(
             context=case_context,
             field_name="working_directory",
         )
-        working_directory_mode = _non_empty_string_get(
-            raw_case,
-            context=case_context,
-            field_name="working_directory_mode",
-        )
-        selected = selected_case_id_set is None or bool(
-            {case_id, f"{suite}:{case_id}"} & selected_case_id_set
-        )
-        prompt = _non_empty_string_get(
-            raw_case, context=case_context, field_name="prompt"
-        )
-        semantic_invariant_list = _semantic_invariant_tuple_get(
-            raw_case, context=case_context
-        )
+        selected = selected_case_id_set is None or bool({case_id, f"{suite}:{case_id}"} & selected_case_id_set)
+        prompt = _non_empty_string_get(raw_case, context=case_context, field_name="prompt")
+        semantic_invariant_list = _semantic_invariant_tuple_get(raw_case, context=case_context)
         if not selected:
             continue
         working_directory = _working_directory_resolve(
             resolved_corpus_path,
             working_directory_value,
             context=f"{case_context}.working_directory",
-            mode=working_directory_mode,
         )
         case_list.append(
             SkillBehaviorCase(
@@ -749,9 +625,7 @@ def _corpus_case_list_load(
             )
         )
     if len(corpus_case_id_list) != len(set(corpus_case_id_list)):
-        raise SkillBehaviorEvalError(
-            f"{resolved_corpus_path}: duplicate case ids are forbidden"
-        )
+        raise SkillBehaviorEvalError(f"{resolved_corpus_path}: duplicate case ids are forbidden")
     return case_list
 
 
@@ -780,16 +654,11 @@ def _selected_case_list_get(
     matched_case_id_set = {
         requested_id
         for requested_id in requested_case_id_set
-        if any(
-            requested_id in {case.id, f"{case.suite}:{case.id}"}
-            for case in selected_case_list
-        )
+        if any(requested_id in {case.id, f"{case.suite}:{case.id}"} for case in selected_case_list)
     }
     unknown_case_id_set = requested_case_id_set - matched_case_id_set
     if unknown_case_id_set:
-        raise SkillBehaviorEvalError(
-            f"unknown case ids: {', '.join(sorted(unknown_case_id_set))}"
-        )
+        raise SkillBehaviorEvalError(f"unknown case ids: {', '.join(sorted(unknown_case_id_set))}")
     return selected_case_list
 
 
@@ -821,9 +690,7 @@ def _judge_prompt_get(
 ) -> str:
     """Build an independent semantic judge prompt for one generated response."""
 
-    invariant_payload = [
-        asdict(invariant) for invariant in case.semantic_invariant_list
-    ]
+    invariant_payload = [asdict(invariant) for invariant in case.semantic_invariant_list]
     return f"""Act as an independent semantic evaluator. Do not inspect files and do not improve the answer.
 
 Evaluate whether the candidate response satisfies each invariant in substance. Do not use keyword, substring,
@@ -852,15 +719,11 @@ def _codex_payload_get(
 ) -> dict[str, Any]:
     """Invoke Codex once and return its structured final payload."""
 
-    with tempfile.TemporaryDirectory(
-        prefix="skill-behavior-eval-"
-    ) as temporary_directory_value:
+    with tempfile.TemporaryDirectory(prefix="skill-behavior-eval-") as temporary_directory_value:
         temporary_directory = Path(temporary_directory_value)
         output_path = temporary_directory / "output.json"
         schema_path = temporary_directory / "schema.json"
-        schema_path.write_text(
-            json.dumps(output_schema, ensure_ascii=False), encoding="utf-8"
-        )
+        schema_path.write_text(json.dumps(output_schema, ensure_ascii=False), encoding="utf-8")
         command = [
             invocation_config.codex_bin,
             "exec",
@@ -901,17 +764,13 @@ def _codex_payload_get(
         try:
             payload = json.loads(output_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
-            raise SkillBehaviorEvalError(
-                f"Codex returned invalid structured output: {exc}"
-            ) from exc
+            raise SkillBehaviorEvalError(f"Codex returned invalid structured output: {exc}") from exc
     if not isinstance(payload, dict):
         raise SkillBehaviorEvalError("Codex structured output must be an object")
     return payload
 
 
-def _generation_payload_validate(
-    payload: dict[str, Any], *, case: SkillBehaviorCase
-) -> dict[str, Any]:
+def _generation_payload_validate(payload: dict[str, Any], *, case: SkillBehaviorCase) -> dict[str, Any]:
     """Validate one generation result beyond its JSON schema."""
 
     _exact_key_set_validate(
@@ -951,9 +810,7 @@ def _judge_result_tuple_get(
     )
     raw_result_list = payload["invariant_result_list"]
     if not isinstance(raw_result_list, list):
-        raise SkillBehaviorEvalError(
-            f"{case.suite}:{case.id}.judge.invariant_result_list: expected list"
-        )
+        raise SkillBehaviorEvalError(f"{case.suite}:{case.id}.judge.invariant_result_list: expected list")
     result_list: list[SemanticInvariantResult] = []
     for index, raw_result in enumerate(raw_result_list):
         result_context = f"{case.suite}:{case.id}.judge.invariant_result_list[{index}]"
@@ -970,13 +827,9 @@ def _judge_result_tuple_get(
             raise SkillBehaviorEvalError(f"{result_context}.passed: expected boolean")
         result_list.append(
             SemanticInvariantResult(
-                id=_non_empty_string_get(
-                    raw_result, context=result_context, field_name="id"
-                ),
+                id=_non_empty_string_get(raw_result, context=result_context, field_name="id"),
                 passed=passed,
-                reason=_non_empty_string_get(
-                    raw_result, context=result_context, field_name="reason"
-                ),
+                reason=_non_empty_string_get(raw_result, context=result_context, field_name="reason"),
             )
         )
     expected_id_list = [invariant.id for invariant in case.semantic_invariant_list]
@@ -1020,14 +873,10 @@ def _case_evaluate(
     )
     activated_skill_set = set(activated_skill_list)
     missing_expected_skill_list = tuple(
-        skill_name
-        for skill_name in case.expected_skill_list
-        if skill_name not in activated_skill_set
+        skill_name for skill_name in case.expected_skill_list if skill_name not in activated_skill_set
     )
     forbidden_activated_skill_list = tuple(
-        skill_name
-        for skill_name in case.forbidden_skill_list
-        if skill_name in activated_skill_set
+        skill_name for skill_name in case.forbidden_skill_list if skill_name in activated_skill_set
     )
     passed = (
         not missing_expected_skill_list
@@ -1053,24 +902,16 @@ def _activated_skill_tuple_normalize(
 ) -> tuple[str, ...]:
     """Canonicalize an unqualified report only when the case makes its provider identity unambiguous."""
 
-    canonical_skill_name_set = set(case.expected_skill_list) | set(
-        case.forbidden_skill_list
-    )
+    canonical_skill_name_set = set(case.expected_skill_list) | set(case.forbidden_skill_list)
     canonical_skill_name_list_by_suffix_map: dict[str, list[str]] = {}
     for canonical_skill_name in canonical_skill_name_set:
         skill_suffix = canonical_skill_name.rsplit(":", maxsplit=1)[-1]
-        canonical_skill_name_list_by_suffix_map.setdefault(skill_suffix, []).append(
-            canonical_skill_name
-        )
+        canonical_skill_name_list_by_suffix_map.setdefault(skill_suffix, []).append(canonical_skill_name)
 
     normalized_skill_list: list[str] = []
     for activated_skill_name in activated_skill_list:
-        candidate_list = canonical_skill_name_list_by_suffix_map.get(
-            activated_skill_name, []
-        )
-        normalized_skill_name = (
-            candidate_list[0] if len(candidate_list) == 1 else activated_skill_name
-        )
+        candidate_list = canonical_skill_name_list_by_suffix_map.get(activated_skill_name, [])
+        normalized_skill_name = candidate_list[0] if len(candidate_list) == 1 else activated_skill_name
         if normalized_skill_name not in normalized_skill_list:
             normalized_skill_list.append(normalized_skill_name)
     return tuple(normalized_skill_list)
@@ -1100,21 +941,12 @@ def _result_print(result: SkillBehaviorCaseResult) -> None:
     status = "PASS" if result.passed else "FAIL"
     print(f"{status} {result.suite}:{result.id}", flush=True)
     if result.missing_expected_skill_list:
-        print(
-            f"  missing_expected={','.join(result.missing_expected_skill_list)}",
-            flush=True,
-        )
+        print(f"  missing_expected={','.join(result.missing_expected_skill_list)}", flush=True)
     if result.forbidden_activated_skill_list:
-        print(
-            f"  forbidden_activated={','.join(result.forbidden_activated_skill_list)}",
-            flush=True,
-        )
+        print(f"  forbidden_activated={','.join(result.forbidden_activated_skill_list)}", flush=True)
     for invariant_result in result.semantic_invariant_result_list:
         if not invariant_result.passed:
-            print(
-                f"  invariant_failed={invariant_result.id}: {invariant_result.reason}",
-                flush=True,
-            )
+            print(f"  invariant_failed={invariant_result.id}: {invariant_result.reason}", flush=True)
 
 
 def _case_list_evaluate(
