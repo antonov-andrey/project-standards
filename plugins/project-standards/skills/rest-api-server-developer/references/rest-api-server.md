@@ -17,7 +17,11 @@
 
 - Concrete route modules, route-local request and response schemas, and route-local helpers live under `backend/api/**`.
 - Files under `backend/**` outside `backend/api/**` MAY own application bootstrap, runtime dependency wiring, backend configuration, canonical router infrastructure such as `backend/api_router.py`, boundary validation such as `backend/validate.py`, and the package surface. They MUST NOT own concrete route entrypoints or route-local schemas.
+- Every route MUST be classified as Product API or infrastructure API before its concrete owner, access declaration, authentication, OpenAPI metadata, audit behavior, or dependencies are selected.
 - Every backend route is registered through `ProductApiRouter` and declares whether it is Product API or infrastructure API.
+- `ProductApiRouter` is the common registration mechanism only; registration through it MUST NOT erase or defer the consequences of the route classification.
+- A Product API route belongs to its concrete Product resource or command owner, declares Product access and security metadata, and may participate in Product audit, delegation, actions, and capabilities when their separate contracts apply.
+- An infrastructure API route belongs to one dedicated infrastructure endpoint owner, declares its infrastructure or public access explicitly, and MUST NOT use Product identity context, Product sessions, Product domain services, administrator delegation, Product actions, or Product capabilities.
 - `ProductApiResource` is the declarative standard-resource mechanism for `create`, `list`, `get`, `update`, `delete`, `archive`, `block`, `publish`, generated delegated variants, capabilities, and OpenAPI.
 - `ProductApiRouter` is the unique-command and route-registry mechanism.
 - Handwritten standard CRUD routes, handwritten delegated variants, and route-local bypasses around the canonical registry are forbidden.

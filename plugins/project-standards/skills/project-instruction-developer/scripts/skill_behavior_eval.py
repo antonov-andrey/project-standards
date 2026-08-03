@@ -123,7 +123,14 @@ ModelCall = Callable[[str, Path, dict[str, Any], ModelInvocationConfig], dict[st
 
 
 def _positive_int_get(value: str) -> int:
-    """Parse one positive integer CLI value."""
+    """Parse one positive integer CLI value.
+
+    Args:
+        value: Candidate value.
+
+    Returns:
+        One positive integer CLI value.
+    """
 
     parsed_value = int(value)
     if parsed_value <= 0:
@@ -132,7 +139,11 @@ def _positive_int_get(value: str) -> int:
 
 
 def _argument_parser_get() -> argparse.ArgumentParser:
-    """Build the command-line parser."""
+    """Build the command-line parser.
+
+    Returns:
+        The command-line parser.
+    """
 
     parser = argparse.ArgumentParser(
         description="Run opt-in GPT-5.6 Sol skill activation and semantic output evaluations.",
@@ -221,7 +232,14 @@ def _exact_key_set_validate(
     context: str,
     required_key_set: set[str],
 ) -> None:
-    """Validate exact required and allowed object keys."""
+    """Validate exact required and allowed object keys.
+
+    Args:
+        payload: Structured operation payload.
+        allowed_key_set: Unique allowed key values.
+        context: Context.
+        required_key_set: Unique required key values.
+    """
 
     missing_key_set = required_key_set - set(payload)
     unknown_key_set = set(payload) - allowed_key_set
@@ -232,7 +250,16 @@ def _exact_key_set_validate(
 
 
 def _non_empty_string_get(payload: dict[str, Any], *, context: str, field_name: str) -> str:
-    """Return one validated non-empty string field."""
+    """Return one validated non-empty string field.
+
+    Args:
+        payload: Structured operation payload.
+        context: Context.
+        field_name: Field name.
+
+    Returns:
+        One validated non-empty string field.
+    """
 
     value = payload.get(field_name)
     if not isinstance(value, str) or not value.strip():
@@ -241,7 +268,16 @@ def _non_empty_string_get(payload: dict[str, Any], *, context: str, field_name: 
 
 
 def _string_tuple_get(payload: dict[str, Any], *, context: str, field_name: str) -> tuple[str, ...]:
-    """Return one validated unique string-list field."""
+    """Return one validated unique string-list field.
+
+    Args:
+        payload: Structured operation payload.
+        context: Context.
+        field_name: Field name.
+
+    Returns:
+        One validated unique string-list field.
+    """
 
     value = payload.get(field_name)
     if not isinstance(value, list) or any(not isinstance(item, str) or not item.strip() for item in value):
@@ -257,7 +293,15 @@ def _semantic_invariant_tuple_get(
     *,
     context: str,
 ) -> tuple[SemanticInvariant, ...]:
-    """Return validated semantic invariants."""
+    """Return validated semantic invariants.
+
+    Args:
+        payload: Structured operation payload.
+        context: Context.
+
+    Returns:
+        The validated semantic invariants.
+    """
 
     raw_invariant_list = payload.get("semantic_invariant_list")
     if not isinstance(raw_invariant_list, list) or not raw_invariant_list:
@@ -286,7 +330,16 @@ def _semantic_invariant_tuple_get(
 
 
 def _git_output_get(repository_root: Path, argument_list: list[str], *, context: str) -> str:
-    """Return checked Git output for one repository-local discovery command."""
+    """Return checked Git output for one repository-local discovery command.
+
+    Args:
+        repository_root: Repository root.
+        argument_list: Exact command arguments.
+        context: Context.
+
+    Returns:
+        The checked Git output for one repository-local discovery command.
+    """
 
     environment_by_name_map = os.environ.copy()
     for variable_name in (
@@ -326,7 +379,15 @@ def _git_output_get(repository_root: Path, argument_list: list[str], *, context:
 
 
 def _git_repository_root_get(path: Path, *, context: str) -> Path:
-    """Return the exact worktree root containing one existing directory."""
+    """Return the exact worktree root containing one existing directory.
+
+    Args:
+        path: Exact filesystem path.
+        context: Context.
+
+    Returns:
+        The exact worktree root containing one existing directory.
+    """
 
     root_text = _git_output_get(
         path,
@@ -339,7 +400,15 @@ def _git_repository_root_get(path: Path, *, context: str) -> Path:
 
 
 def _git_common_directory_get(repository_root: Path, *, context: str) -> Path:
-    """Return one repository's canonical common Git administration directory."""
+    """Return one repository's canonical common Git administration directory.
+
+    Args:
+        repository_root: Repository root.
+        context: Context.
+
+    Returns:
+        One repository's canonical common Git administration directory.
+    """
 
     common_directory = Path(
         _git_output_get(
@@ -360,7 +429,17 @@ def _registered_worktree_root_validate(
     expected_common_directory: Path,
     context: str,
 ) -> Path:
-    """Return one physical registered worktree after re-proving its Git identity."""
+    """Return one physical registered worktree after re-proving its Git identity.
+
+    Args:
+        raw_worktree_path: Exact filesystem path for raw worktree.
+        expected_branch_ref: Expected branch ref.
+        expected_common_directory: Expected common directory.
+        context: Context.
+
+    Returns:
+        One physical registered worktree after re-proving its Git identity.
+    """
 
     worktree_path = Path(raw_worktree_path)
     if worktree_path.is_symlink() or not worktree_path.is_dir():
@@ -396,7 +475,15 @@ def _registered_worktree_root_validate(
 
 
 def _git_worktree_record_list_get(repository_root: Path, *, context: str) -> list[dict[str, str]]:
-    """Return NUL-safe Git worktree records."""
+    """Return NUL-safe Git worktree records.
+
+    Args:
+        repository_root: Repository root.
+        context: Context.
+
+    Returns:
+        NUL-delimited Git worktree records.
+    """
 
     output = _git_output_get(
         repository_root,
@@ -430,7 +517,17 @@ def _working_directory_resolve(
     context: str,
     mode: str,
 ) -> Path:
-    """Resolve one corpus directory under its declared Git revision policy."""
+    """Resolve one corpus directory under its declared Git revision policy.
+
+    Args:
+        resolved_corpus_path: Exact filesystem path for resolved corpus.
+        working_directory_value: Working directory value.
+        context: Context.
+        mode: Mode.
+
+    Returns:
+        One corpus directory under its declared Git revision policy.
+    """
 
     if mode not in WORKING_DIRECTORY_MODE_SET:
         raise SkillBehaviorEvalError(
@@ -592,7 +689,15 @@ def _corpus_case_list_load(
     *,
     selected_case_id_set: set[str] | None = None,
 ) -> list[SkillBehaviorCase]:
-    """Load all case contracts while resolving only the selected runtime roots."""
+    """Load all case contracts while resolving only the selected runtime roots.
+
+    Args:
+        corpus_path: Exact filesystem path for corpus.
+        selected_case_id_set: Unique selected case identity values.
+
+    Returns:
+        All case contracts with runtime roots resolved only for selected cases.
+    """
 
     resolved_corpus_path = corpus_path.expanduser().resolve()
     try:
@@ -704,7 +809,15 @@ def _selected_case_list_get(
     case_id_list: Sequence[str],
     corpus_path_list: Sequence[Path],
 ) -> list[SkillBehaviorCase]:
-    """Load corpora and apply exact case selection."""
+    """Load corpora and apply exact case selection.
+
+    Args:
+        case_id_list: Ordered case identity values.
+        corpus_path_list: Ordered corpus path values.
+
+    Returns:
+        Cases selected exactly from the declared corpora.
+    """
 
     requested_case_id_set = set(case_id_list)
     case_list = [
@@ -733,7 +846,14 @@ def _selected_case_list_get(
 
 
 def _generation_prompt_get(case: SkillBehaviorCase) -> str:
-    """Build the isolated generation prompt for one case."""
+    """Build the isolated generation prompt for one case.
+
+    Args:
+        case: Case.
+
+    Returns:
+        The isolated generation prompt for one case.
+    """
 
     return f"""This is a read-only skill behavior evaluation.
 
@@ -758,7 +878,15 @@ def _judge_prompt_get(
     case: SkillBehaviorCase,
     generation_payload: dict[str, Any],
 ) -> str:
-    """Build an independent semantic judge prompt for one generated response."""
+    """Build an independent semantic judge prompt for one generated response.
+
+    Args:
+        case: Case.
+        generation_payload: Generation payload.
+
+    Returns:
+        An independent semantic judge prompt for one generated response.
+    """
 
     invariant_payload = [asdict(invariant) for invariant in case.semantic_invariant_list]
     return f"""Act as an independent semantic evaluator. Do not inspect files and do not improve the answer.
@@ -787,7 +915,17 @@ def _codex_payload_get(
     output_schema: dict[str, Any],
     invocation_config: ModelInvocationConfig,
 ) -> dict[str, Any]:
-    """Invoke Codex once and return its structured final payload."""
+    """Invoke Codex once and return its structured final payload.
+
+    Args:
+        prompt: Prompt.
+        working_directory: Working directory.
+        output_schema: Output schema.
+        invocation_config: Invocation config.
+
+    Returns:
+        Structured final response returned by the isolated Codex invocation.
+    """
 
     with tempfile.TemporaryDirectory(prefix="skill-behavior-eval-") as temporary_directory_value:
         temporary_directory = Path(temporary_directory_value)
@@ -851,7 +989,14 @@ def _checked_codex_command_run(
     codex_home: Path,
     context: str,
 ) -> None:
-    """Run one isolated Codex plugin-setup command."""
+    """Run one isolated Codex plugin-setup command.
+
+    Args:
+        argument_list: Exact command arguments.
+        codex_bin: Codex bin.
+        codex_home: Codex home.
+        context: Context.
+    """
 
     environment_by_name_map = os.environ.copy()
     environment_by_name_map["CODEX_HOME"] = str(codex_home)
@@ -882,7 +1027,14 @@ def _isolated_codex_home_prepare(
     marketplace_path_list: Sequence[Path],
     plugin_selector_list: Sequence[str],
 ) -> None:
-    """Install exact worktree plugin sources into one ephemeral Codex home."""
+    """Install exact worktree plugin sources into one ephemeral Codex home.
+
+    Args:
+        codex_home: Codex home.
+        codex_bin: Codex bin.
+        marketplace_path_list: Ordered marketplace path values.
+        plugin_selector_list: Ordered plugin selector values.
+    """
 
     if bool(marketplace_path_list) != bool(plugin_selector_list):
         raise SkillBehaviorEvalError(
@@ -1001,7 +1153,14 @@ def _isolated_codex_home_prepare(
 def _plugin_selector_tuple_normalize(
     plugin_selector_list: Sequence[str],
 ) -> tuple[str, ...]:
-    """Validate and normalize exact plugin selectors before installation."""
+    """Validate and normalize exact plugin selectors before installation.
+
+    Args:
+        plugin_selector_list: Ordered plugin selector values.
+
+    Returns:
+        Values in deterministic immutable order.
+    """
 
     normalized_plugin_selector_list = tuple(selector.strip() for selector in plugin_selector_list)
     if any(
@@ -1018,7 +1177,12 @@ def _expected_plugin_source_binding_validate(
     case_list: Sequence[SkillBehaviorCase],
     plugin_selector_list: Sequence[str],
 ) -> None:
-    """Require every expected provider in the exact isolated source set."""
+    """Require every expected provider in the exact isolated source set.
+
+    Args:
+        case_list: Ordered case values.
+        plugin_selector_list: Ordered plugin selector values.
+    """
 
     installed_plugin_name_set = {
         selector.split("@", 1)[0] for selector in _plugin_selector_tuple_normalize(plugin_selector_list)
@@ -1037,7 +1201,15 @@ def _expected_plugin_source_binding_validate(
 
 
 def _generation_payload_validate(payload: dict[str, Any], *, case: SkillBehaviorCase) -> dict[str, Any]:
-    """Validate one generation result beyond its JSON schema."""
+    """Validate one generation result beyond its JSON schema.
+
+    Args:
+        payload: Structured operation payload.
+        case: Case.
+
+    Returns:
+        Validated generation response payload.
+    """
 
     _exact_key_set_validate(
         payload,
@@ -1066,7 +1238,15 @@ def _judge_result_tuple_get(
     *,
     case: SkillBehaviorCase,
 ) -> tuple[SemanticInvariantResult, ...]:
-    """Validate and normalize one independent judge result."""
+    """Validate and normalize one independent judge result.
+
+    Args:
+        payload: Structured operation payload.
+        case: Case.
+
+    Returns:
+        Values in deterministic immutable order.
+    """
 
     _exact_key_set_validate(
         payload,
@@ -1113,7 +1293,16 @@ def _case_evaluate(
     invocation_config: ModelInvocationConfig,
     model_call: ModelCall = _codex_payload_get,
 ) -> SkillBehaviorCaseResult:
-    """Run generation and independent semantic judging for one case."""
+    """Run generation and independent semantic judging for one case.
+
+    Args:
+        case: Case.
+        invocation_config: Invocation config.
+        model_call: Model call.
+
+    Returns:
+        Resulting skill behavior case result.
+    """
 
     generation_payload = _generation_payload_validate(
         model_call(
@@ -1166,7 +1355,15 @@ def _activated_skill_tuple_normalize(
     *,
     case: SkillBehaviorCase,
 ) -> tuple[str, ...]:
-    """Canonicalize an unqualified report only when the case makes its provider identity unambiguous."""
+    """Canonicalize an unqualified report only when the case makes its provider identity unambiguous.
+
+    Args:
+        activated_skill_list: Ordered activated skill values.
+        case: Case.
+
+    Returns:
+        Values in deterministic immutable order.
+    """
 
     canonical_skill_name_set = set(case.expected_skill_list) | set(case.forbidden_skill_list)
     canonical_skill_name_list_by_suffix_map: dict[str, list[str]] = {}
@@ -1188,7 +1385,15 @@ def _result_payload_get(
     invocation_config: ModelInvocationConfig,
     result_list: Sequence[SkillBehaviorCaseResult],
 ) -> dict[str, Any]:
-    """Build the serializable run result."""
+    """Build the serializable run result.
+
+    Args:
+        invocation_config: Invocation config.
+        result_list: Ordered result values.
+
+    Returns:
+        The serializable run result.
+    """
 
     return {
         "case_result_list": [asdict(result) for result in result_list],
@@ -1202,7 +1407,11 @@ def _result_payload_get(
 
 
 def _result_print(result: SkillBehaviorCaseResult) -> None:
-    """Print one concise case result."""
+    """Print one concise case result.
+
+    Args:
+        result: Result.
+    """
 
     status = "PASS" if result.passed else "FAIL"
     print(f"{status} {result.suite}:{result.id}", flush=True)
@@ -1230,7 +1439,16 @@ def _case_list_evaluate(
     concurrency: int,
     invocation_config: ModelInvocationConfig,
 ) -> list[SkillBehaviorCaseResult]:
-    """Evaluate cases concurrently while preserving corpus order in the result."""
+    """Evaluate cases concurrently while preserving corpus order in the result.
+
+    Args:
+        case_list: Ordered case values.
+        concurrency: Concurrency.
+        invocation_config: Invocation config.
+
+    Returns:
+        Requested values in deterministic order.
+    """
 
     result_by_index_map: dict[int, SkillBehaviorCaseResult] = {}
     with ThreadPoolExecutor(max_workers=min(concurrency, len(case_list))) as executor:
@@ -1251,7 +1469,14 @@ def _case_list_evaluate(
 
 
 def main(argv_list: Sequence[str] | None = None) -> int:
-    """Run selected skill behavior cases."""
+    """Run selected skill behavior cases.
+
+    Args:
+        argv_list: Ordered argv values.
+
+    Returns:
+        Zero when all cases pass, 1 for semantic failures, or 2 for invalid evaluation input.
+    """
 
     args = _argument_parser_get().parse_args(argv_list)
     try:

@@ -22,7 +22,11 @@ CORPUS_PATH = Path(__file__).resolve().parents[1] / "skill_behavior_eval/corpus-
 
 
 def _module_load() -> ModuleType:
-    """Load the script as one isolated module."""
+    """Load the script as one isolated module.
+
+    Returns:
+        The script as one isolated module.
+    """
 
     spec = importlib.util.spec_from_file_location("skill_behavior_eval", SCRIPT_PATH)
     if spec is None or spec.loader is None:
@@ -34,7 +38,12 @@ def _module_load() -> ModuleType:
 
 
 def _corpus_write(path: Path, *, expected_skill_list: list[str] | None = None) -> None:
-    """Write one minimal valid corpus."""
+    """Write one minimal valid corpus.
+
+    Args:
+        path: Exact filesystem path.
+        expected_skill_list: Expected skill list.
+    """
 
     path.write_text(
         json.dumps(
@@ -64,7 +73,15 @@ def _corpus_write(path: Path, *, expected_skill_list: list[str] | None = None) -
 
 
 def _git_run(repository: Path, argument_list: list[str]) -> str:
-    """Run one checked Git command in a test repository."""
+    """Run one checked Git command in a test repository.
+
+    Args:
+        repository: Exact Git repository root.
+        argument_list: Exact command arguments.
+
+    Returns:
+        Resulting text value.
+    """
 
     result = subprocess.run(
         ["git", "-C", str(repository), *argument_list],
@@ -77,7 +94,11 @@ def _git_run(repository: Path, argument_list: list[str]) -> str:
 
 
 def _repository_create(repository: Path) -> None:
-    """Create one minimal main-branch test repository."""
+    """Create one minimal main-branch test repository.
+
+    Args:
+        repository: Exact Git repository root.
+    """
 
     repository.mkdir()
     _git_run(repository, ["init", "-b", "main"])
@@ -89,7 +110,12 @@ def _repository_create(repository: Path) -> None:
 
 
 def _separate_git_directory_repository_create(repository: Path, git_directory: Path) -> None:
-    """Create one main worktree whose Git administration lives elsewhere."""
+    """Create one main worktree whose Git administration lives elsewhere.
+
+    Args:
+        repository: Exact Git repository root.
+        git_directory: Git directory.
+    """
 
     _git_run(
         repository.parent,
@@ -126,7 +152,11 @@ def test_bundled_corpus_declares_each_working_directory_revision_policy() -> Non
 
 
 def test_corpus_load_resolves_working_directory(tmp_path: Path) -> None:
-    """A valid corpus should resolve its repository-relative working directory."""
+    """A valid corpus should resolve its repository-relative working directory.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
 
     module = _module_load()
     repository = tmp_path / "repository"
@@ -146,7 +176,11 @@ def test_corpus_load_resolves_working_directory(tmp_path: Path) -> None:
 def test_case_selection_does_not_resolve_unselected_runtime_root(
     tmp_path: Path,
 ) -> None:
-    """A focused task-worktree eval must not require unrelated repository worktrees."""
+    """A focused task-worktree eval must not require unrelated repository worktrees.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
 
     module = _module_load()
     repository = tmp_path / "repository"
@@ -173,7 +207,11 @@ def test_case_selection_does_not_resolve_unselected_runtime_root(
 
 
 def test_corpus_load_rejects_boolean_schema_version(tmp_path: Path) -> None:
-    """A boolean must not alias the integer version in the closed corpus schema."""
+    """A boolean must not alias the integer version in the closed corpus schema.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
 
     module = _module_load()
     corpus_path = tmp_path / "corpus-v1.json"
@@ -190,7 +228,12 @@ def test_git_discovery_ignores_inherited_repository_redirection(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Repository discovery must not honor caller-controlled Git redirect state."""
+    """Repository discovery must not honor caller-controlled Git redirect state.
+
+    Args:
+        monkeypatch: Pytest mutation fixture.
+        tmp_path: Temporary directory path.
+    """
 
     module = _module_load()
     intended_repository = tmp_path / "intended"
@@ -231,7 +274,11 @@ def test_git_discovery_ignores_inherited_repository_redirection(
 
 
 def test_corpus_load_supports_a_separate_primary_git_directory(tmp_path: Path) -> None:
-    """Primary-worktree discovery must not assume a physical root `.git` directory."""
+    """Primary-worktree discovery must not assume a physical root `.git` directory.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
 
     module = _module_load()
     repository = tmp_path / "repository"
@@ -254,7 +301,12 @@ def test_working_directory_rejects_an_existing_direct_target_on_another_branch(
     tmp_path: Path,
     direct_kind: str,
 ) -> None:
-    """An existing direct path must not bypass same-branch worktree selection."""
+    """An existing direct path must not bypass same-branch worktree selection.
+
+    Args:
+        tmp_path: Temporary directory path.
+        direct_kind: Direct kind.
+    """
 
     module = _module_load()
     source_repository = tmp_path / "source"
@@ -290,7 +342,11 @@ def test_working_directory_rejects_an_existing_direct_target_on_another_branch(
 def test_corpus_load_maps_a_sibling_repository_to_the_same_branch_worktree(
     tmp_path: Path,
 ) -> None:
-    """A linked-worktree corpus must not resolve a sibling case back to main."""
+    """A linked-worktree corpus must not resolve a sibling case back to main.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
 
     module = _module_load()
     source_repository = tmp_path / "source"
@@ -325,7 +381,11 @@ def test_corpus_load_maps_a_sibling_repository_to_the_same_branch_worktree(
 def test_corpus_load_rejects_a_same_branch_subdirectory_symbolic_escape(
     tmp_path: Path,
 ) -> None:
-    """A target subdirectory must remain physically inside the selected worktree."""
+    """A target subdirectory must remain physically inside the selected worktree.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
 
     module = _module_load()
     source_repository = tmp_path / "source"
@@ -367,7 +427,11 @@ def test_corpus_load_rejects_a_same_branch_subdirectory_symbolic_escape(
 def test_corpus_load_rejects_a_symbolically_replaced_registered_worktree(
     tmp_path: Path,
 ) -> None:
-    """A stale registered path cannot redirect selection to an unrelated repository."""
+    """A stale registered path cannot redirect selection to an unrelated repository.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
 
     module = _module_load()
     source_repository = tmp_path / "source"
@@ -410,7 +474,11 @@ def test_corpus_load_rejects_a_symbolically_replaced_registered_worktree(
 def test_corpus_load_rejects_a_sibling_without_the_same_branch_worktree(
     tmp_path: Path,
 ) -> None:
-    """A cross-repository case must never silently execute in the target main worktree."""
+    """A cross-repository case must never silently execute in the target main worktree.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
 
     module = _module_load()
     source_repository = tmp_path / "source"
@@ -438,7 +506,11 @@ def test_corpus_load_rejects_a_sibling_without_the_same_branch_worktree(
 def test_corpus_load_uses_an_explicit_clean_synchronized_main_dependency(
     tmp_path: Path,
 ) -> None:
-    """A non-participant target may use main only through its explicit closed policy."""
+    """A non-participant target may use main only through its explicit closed policy.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
 
     module = _module_load()
     source_repository = tmp_path / "source"
@@ -477,7 +549,11 @@ def test_corpus_load_uses_an_explicit_clean_synchronized_main_dependency(
 
 
 def test_corpus_load_rejects_activation_overlap(tmp_path: Path) -> None:
-    """One skill cannot be both expected and forbidden."""
+    """One skill cannot be both expected and forbidden.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
 
     module = _module_load()
     corpus_root = tmp_path / "skill_behavior_eval"
@@ -493,7 +569,11 @@ def test_corpus_load_rejects_activation_overlap(tmp_path: Path) -> None:
 
 
 def test_corpus_load_normalizes_invalid_utf8(tmp_path: Path) -> None:
-    """Invalid corpus encoding must remain inside the runner error boundary."""
+    """Invalid corpus encoding must remain inside the runner error boundary.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
 
     module = _module_load()
     corpus_path = tmp_path / "corpus-v1.json"
@@ -504,7 +584,11 @@ def test_corpus_load_normalizes_invalid_utf8(tmp_path: Path) -> None:
 
 
 def test_git_repository_root_preserves_non_utf8_filesystem_text(tmp_path: Path) -> None:
-    """Git discovery must decode valid filesystem bytes with surrogateescape."""
+    """Git discovery must decode valid filesystem bytes with surrogateescape.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
 
     module = _module_load()
     initial_repository = tmp_path / "repository"
@@ -518,7 +602,11 @@ def test_git_repository_root_preserves_non_utf8_filesystem_text(tmp_path: Path) 
 def test_case_evaluate_combines_activation_and_independent_judge(
     tmp_path: Path,
 ) -> None:
-    """Case success should require expected activation and every semantic invariant."""
+    """Case success should require expected activation and every semantic invariant.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
 
     module = _module_load()
     corpus_root = tmp_path / "skill_behavior_eval"
@@ -534,7 +622,17 @@ def test_case_evaluate_combines_activation_and_independent_judge(
         output_schema: dict[str, Any],
         invocation_config: Any,
     ) -> dict[str, Any]:
-        """Return generation first and judge output second."""
+        """Return generation first and judge output second.
+
+        Args:
+            prompt: Prompt.
+            working_directory: Working directory.
+            output_schema: Output schema.
+            invocation_config: Invocation config.
+
+        Returns:
+            The scripted generation result followed by the judge result.
+        """
 
         call_list.append(
             {
@@ -579,7 +677,11 @@ def test_case_evaluate_combines_activation_and_independent_judge(
 def test_case_evaluate_reports_missing_and_forbidden_activations(
     tmp_path: Path,
 ) -> None:
-    """Activation failures should be independent from a passing semantic judge."""
+    """Activation failures should be independent from a passing semantic judge.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
 
     module = _module_load()
     corpus_root = tmp_path / "skill_behavior_eval"
@@ -624,7 +726,11 @@ def test_case_evaluate_reports_missing_and_forbidden_activations(
 def test_activation_normalization_requires_one_unambiguous_provider_identity(
     tmp_path: Path,
 ) -> None:
-    """A short self-report should canonicalize only against one exact case identity."""
+    """A short self-report should canonicalize only against one exact case identity.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
 
     module = _module_load()
     corpus_root = tmp_path / "skill_behavior_eval"
@@ -651,7 +757,12 @@ def test_activation_normalization_requires_one_unambiguous_provider_identity(
 
 
 def test_case_list_evaluate_preserves_corpus_order(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Concurrent completion order must not change the serialized corpus order."""
+    """Concurrent completion order must not change the serialized corpus order.
+
+    Args:
+        monkeypatch: Pytest mutation fixture.
+        tmp_path: Temporary directory path.
+    """
 
     module = _module_load()
     corpus_root = tmp_path / "skill_behavior_eval"
@@ -671,7 +782,15 @@ def test_case_list_evaluate_preserves_corpus_order(monkeypatch: pytest.MonkeyPat
     )
 
     def _case_evaluate(case: Any, *, invocation_config: Any) -> Any:
-        """Return the second case first."""
+        """Return the second case first.
+
+        Args:
+            case: Case.
+            invocation_config: Invocation config.
+
+        Returns:
+            The second case first.
+        """
 
         if case.id == "case-a":
             time.sleep(0.02)
@@ -705,7 +824,12 @@ def test_isolated_codex_home_installs_exact_marketplace_plugins(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Behavior evaluation should bind plugin resolution to explicit worktree sources."""
+    """Behavior evaluation should bind plugin resolution to explicit worktree sources.
+
+    Args:
+        monkeypatch: Pytest mutation fixture.
+        tmp_path: Temporary directory path.
+    """
 
     module = _module_load()
     source_codex_home = tmp_path / "source-codex-home"
@@ -764,7 +888,11 @@ def test_isolated_codex_home_installs_exact_marketplace_plugins(
 
 
 def test_isolated_codex_home_rejects_partial_source_binding(tmp_path: Path) -> None:
-    """A source override without exact plugin selectors must fail closed."""
+    """A source override without exact plugin selectors must fail closed.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
 
     module = _module_load()
 
@@ -781,7 +909,12 @@ def test_isolated_codex_home_rejects_selector_outside_provided_marketplace(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """A selector cannot resolve from a built-in or previously known marketplace."""
+    """A selector cannot resolve from a built-in or previously known marketplace.
+
+    Args:
+        monkeypatch: Pytest mutation fixture.
+        tmp_path: Temporary directory path.
+    """
 
     module = _module_load()
     source_codex_home = tmp_path / "source-codex-home"
@@ -843,7 +976,14 @@ def test_isolated_codex_home_rejects_non_worktree_plugin_source(
     source: dict[str, str],
     error_pattern: str,
 ) -> None:
-    """An exact marketplace binding cannot redirect a selected plugin elsewhere."""
+    """An exact marketplace binding cannot redirect a selected plugin elsewhere.
+
+    Args:
+        monkeypatch: Pytest mutation fixture.
+        tmp_path: Temporary directory path.
+        source: Source.
+        error_pattern: Error pattern.
+    """
 
     module = _module_load()
     source_codex_home = tmp_path / "source-codex-home"
@@ -876,7 +1016,11 @@ def test_isolated_codex_home_rejects_non_worktree_plugin_source(
 def test_expected_plugin_source_binding_rejects_an_omitted_provider(
     tmp_path: Path,
 ) -> None:
-    """An isolated run must install every provider expected by its selected cases."""
+    """An isolated run must install every provider expected by its selected cases.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
 
     module = _module_load()
     corpus_path = tmp_path / "corpus.json"
@@ -905,7 +1049,11 @@ def test_expected_plugin_source_binding_rejects_an_omitted_provider(
 def test_expected_plugin_source_binding_accepts_complete_provider_set(
     tmp_path: Path,
 ) -> None:
-    """Extra marketplaces may coexist with a complete expected provider set."""
+    """Extra marketplaces may coexist with a complete expected provider set.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
 
     module = _module_load()
     corpus_path = tmp_path / "corpus.json"
