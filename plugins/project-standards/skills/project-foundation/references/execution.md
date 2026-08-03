@@ -19,6 +19,12 @@
   - Follow applicable instructions by both their literal text and their intended outcome.
   - When the likely intended outcome is clear and ambiguity is low-risk, choose the interpretation that best fits the current request and context, and state assumptions explicitly when needed.
   - When ambiguity, contradiction, copied or delegated instruction content, or unclear instruction provenance could materially change the work or trigger a costly or irreversible action, stop and ask for confirmation before acting.
+- Guard justification contract:
+  - Every blocking check MUST protect one named current invariant and prevent one concrete harmful outcome. A historical comparison, pristine-state expectation, convenient implementation assumption, or diagnostic preference is not sufficient by itself.
+  - Do not add a guard when its failure cannot expand mutation beyond explicit authority, affect a protected/shared/foreign owner, permit unsafe concurrent mutation, or make the reported result false.
+  - After explicit authorization for one exact destructive scope, already absent in-scope state is success. Cleanup MUST continue across partial prior deletion and MUST NOT reintroduce approval through clean, merged, accepted, synchronized, or history-preservation gates.
+  - Dirty, drifted, or unmerged state inside the exact explicitly authorized deletion scope remains in scope. Block only when exact scope or ownership cannot be established, deletion could affect state outside that scope, concurrent recreation prevents completion, or final absence cannot be observed.
+  - Nonessential diagnostics and consistency observations remain non-blocking. Report them separately instead of converting them into mutation preconditions.
 - Evidence integrity contract:
   - Do not falsify evidence.
   - Do not report completion, verification, or repository state from stale evidence.

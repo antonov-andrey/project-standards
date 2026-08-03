@@ -356,6 +356,29 @@
           "text": "The response requires semantic inspection of constructor dependencies, boundary imports, state, public operations, and private method groups; it does not accept file size thresholds, mixins, forwarding wrappers, or a file move as proof of correct ownership."
         }
       ]
+    },
+    {
+      "id": "indirect-idempotent-explicit-cleanup",
+      "working_directory": "../../workflow-control-center",
+      "working_directory_mode": "same-branch",
+      "prompt": "Design an explicitly authorized cleanup command for one exact application cache namespace. Some object-store keys, local cache files, and job records may already be absent, stale, or changed. Explain which checks may block deletion and which must not, without changing files.",
+      "expected_skill_list": [
+        "project-standards:project-foundation"
+      ],
+      "forbidden_skill_list": [
+        "project-standards:project-standard-audit",
+        "agent-workflows:goal-delete"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "semantically-justified-guards",
+          "text": "The response permits blocking checks only for exact scope or ownership, protected shared or foreign state, unsafe concurrent mutation, or truthful final absence; it does not promote historical consistency or diagnostic preferences into blockers."
+        },
+        {
+          "id": "partial-absence-is-success",
+          "text": "The response treats already absent resources as completed cleanup, includes stale or changed state inside the explicitly authorized exact deletion scope, and does not introduce pristine-state, synchronization, or history-preservation gates."
+        }
+      ]
     }
   ]
 }
