@@ -22,6 +22,8 @@ Project-owned YAML использует строгую YAML 1.2 boundary без 
 
 Owner-local `project-instruction-developer/scripts/skill_behavior_eval.py` запускает для каждого case два независимых прохода target model. Первый проход работает в read-only Codex session, применяет реальные project instructions и skills и возвращает user-facing response и фактически активированные skills. Второй проход получает scenario и готовый response и оценивает каждый invariant по смыслу. Substring, keyword, heading и formatting checks не являются semantic verdict.
 
+Проверка ещё не смерженных provider-изменений обязана явно передавать каждый exact provider worktree через `--plugin-marketplace` и каждый нужный `NAME@MARKETPLACE` через `--plugin`. Каждый selector должен ссылаться на marketplace name и plugin inventory именно одного из переданных manifests, а выбранный plugin обязан иметь `source=local` и physical directory внутри этого exact marketplace worktree. Runner устанавливает эти sources в отдельный временный `CODEX_HOME`; remote, escaping либо уже установленный snapshot из primary worktree не может незаметно подменить проверяемый change-set.
+
 Runner по умолчанию использует `gpt-5.6-sol` и не входит в `pytest`, `project-standard-check` или обычный deterministic validation. Он является отдельной opt-in acceptance фазой для изменений descriptions, invocation policy, skill boundaries, orchestration и существенных skill instructions. Versioned corpora принадлежат provider или project, чьи skills они проверяют; реализация runner не копируется.
 
 ## Исполняемая Проверка Стандартов

@@ -70,5 +70,5 @@ project/
 - Validate every skill with `python ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py <skill-root>`.
 - Run the workspace inventory with `python plugins/project-standards/skills/project-standard-audit/scripts/workspace_inventory.py --workspace-root <workspace-root> --check`.
 - Run changed-scope mechanical checking with `project-standard-check --project-root <repository-root> --scope changed`; use `--scope all` for the complete mechanical scope. Neither command replaces semantic audit.
-- Validate or run the provider behavior corpus with `plugins/project-standards/skills/project-instruction-developer/scripts/skill_behavior_eval.py --corpus skill_behavior_eval/corpus-v1.json --list` or the same command without `--list`.
+- Validate the provider behavior corpus deterministically with `plugins/project-standards/skills/project-instruction-developer/scripts/skill_behavior_eval.py --corpus skill_behavior_eval/corpus-v1.json --list`. Run its model phase with exact unmerged provider sources by adding each provider worktree as `--plugin-marketplace <root>` and each required plugin from those exact local manifests as `--plugin <name>@<marketplace>`; never rely on an installed primary-worktree snapshot for task-worktree acceptance.
 - Run provider tests with `pytest -q`.

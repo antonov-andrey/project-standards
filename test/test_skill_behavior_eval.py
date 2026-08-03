@@ -143,7 +143,9 @@ def test_corpus_load_resolves_working_directory(tmp_path: Path) -> None:
     assert case_list[0].semantic_invariant_list[0].id == "bounded"
 
 
-def test_case_selection_does_not_resolve_unselected_runtime_root(tmp_path: Path) -> None:
+def test_case_selection_does_not_resolve_unselected_runtime_root(
+    tmp_path: Path,
+) -> None:
     """A focused task-worktree eval must not require unrelated repository worktrees."""
 
     module = _module_load()
@@ -261,7 +263,10 @@ def test_working_directory_rejects_an_existing_direct_target_on_another_branch(
     _repository_create(target_repository)
     task_branch = "2026-07-30-behavior-eval"
     source_task_root = source_repository / ".worktree" / task_branch
-    _git_run(source_repository, ["worktree", "add", "-b", task_branch, str(source_task_root), "HEAD"])
+    _git_run(
+        source_repository,
+        ["worktree", "add", "-b", task_branch, str(source_task_root), "HEAD"],
+    )
     corpus_root = source_task_root / "skill_behavior_eval"
     corpus_root.mkdir()
     corpus_path = corpus_root / "corpus-v1.json"
@@ -282,7 +287,9 @@ def test_working_directory_rejects_an_existing_direct_target_on_another_branch(
         )
 
 
-def test_corpus_load_maps_a_sibling_repository_to_the_same_branch_worktree(tmp_path: Path) -> None:
+def test_corpus_load_maps_a_sibling_repository_to_the_same_branch_worktree(
+    tmp_path: Path,
+) -> None:
     """A linked-worktree corpus must not resolve a sibling case back to main."""
 
     module = _module_load()
@@ -293,8 +300,14 @@ def test_corpus_load_maps_a_sibling_repository_to_the_same_branch_worktree(tmp_p
     task_branch = "2026-07-30-behavior-eval"
     source_task_root = source_repository / ".worktree" / task_branch
     target_task_root = target_repository / ".worktree" / task_branch
-    _git_run(source_repository, ["worktree", "add", "-b", task_branch, str(source_task_root), "HEAD"])
-    _git_run(target_repository, ["worktree", "add", "-b", task_branch, str(target_task_root), "HEAD"])
+    _git_run(
+        source_repository,
+        ["worktree", "add", "-b", task_branch, str(source_task_root), "HEAD"],
+    )
+    _git_run(
+        target_repository,
+        ["worktree", "add", "-b", task_branch, str(target_task_root), "HEAD"],
+    )
     corpus_root = source_task_root / "skill_behavior_eval"
     corpus_root.mkdir()
     corpus_path = corpus_root / "corpus-v1.json"
@@ -309,7 +322,9 @@ def test_corpus_load_maps_a_sibling_repository_to_the_same_branch_worktree(tmp_p
     assert _git_run(case.working_directory, ["branch", "--show-current"]) == task_branch
 
 
-def test_corpus_load_rejects_a_same_branch_subdirectory_symbolic_escape(tmp_path: Path) -> None:
+def test_corpus_load_rejects_a_same_branch_subdirectory_symbolic_escape(
+    tmp_path: Path,
+) -> None:
     """A target subdirectory must remain physically inside the selected worktree."""
 
     module = _module_load()
@@ -325,8 +340,14 @@ def test_corpus_load_rejects_a_same_branch_subdirectory_symbolic_escape(tmp_path
     task_branch = "2026-07-30-behavior-eval"
     source_task_root = source_repository / ".worktree" / task_branch
     target_task_root = target_repository / ".worktree" / task_branch
-    _git_run(source_repository, ["worktree", "add", "-b", task_branch, str(source_task_root), "HEAD"])
-    _git_run(target_repository, ["worktree", "add", "-b", task_branch, str(target_task_root), "HEAD"])
+    _git_run(
+        source_repository,
+        ["worktree", "add", "-b", task_branch, str(source_task_root), "HEAD"],
+    )
+    _git_run(
+        target_repository,
+        ["worktree", "add", "-b", task_branch, str(target_task_root), "HEAD"],
+    )
     corpus_root = source_task_root / "skill_behavior_eval"
     corpus_root.mkdir()
     corpus_path = corpus_root / "corpus-v1.json"
@@ -343,7 +364,9 @@ def test_corpus_load_rejects_a_same_branch_subdirectory_symbolic_escape(tmp_path
         module._corpus_case_list_load(corpus_path)
 
 
-def test_corpus_load_rejects_a_symbolically_replaced_registered_worktree(tmp_path: Path) -> None:
+def test_corpus_load_rejects_a_symbolically_replaced_registered_worktree(
+    tmp_path: Path,
+) -> None:
     """A stale registered path cannot redirect selection to an unrelated repository."""
 
     module = _module_load()
@@ -357,8 +380,14 @@ def test_corpus_load_rejects_a_symbolically_replaced_registered_worktree(tmp_pat
     source_task_root = source_repository / ".worktree" / task_branch
     target_task_root = target_repository / ".worktree" / task_branch
     unrelated_task_root = unrelated_repository / ".worktree" / task_branch
-    _git_run(source_repository, ["worktree", "add", "-b", task_branch, str(source_task_root), "HEAD"])
-    _git_run(target_repository, ["worktree", "add", "-b", task_branch, str(target_task_root), "HEAD"])
+    _git_run(
+        source_repository,
+        ["worktree", "add", "-b", task_branch, str(source_task_root), "HEAD"],
+    )
+    _git_run(
+        target_repository,
+        ["worktree", "add", "-b", task_branch, str(target_task_root), "HEAD"],
+    )
     _git_run(
         unrelated_repository,
         ["worktree", "add", "-b", task_branch, str(unrelated_task_root), "HEAD"],
@@ -378,7 +407,9 @@ def test_corpus_load_rejects_a_symbolically_replaced_registered_worktree(tmp_pat
         module._corpus_case_list_load(corpus_path)
 
 
-def test_corpus_load_rejects_a_sibling_without_the_same_branch_worktree(tmp_path: Path) -> None:
+def test_corpus_load_rejects_a_sibling_without_the_same_branch_worktree(
+    tmp_path: Path,
+) -> None:
     """A cross-repository case must never silently execute in the target main worktree."""
 
     module = _module_load()
@@ -388,7 +419,10 @@ def test_corpus_load_rejects_a_sibling_without_the_same_branch_worktree(tmp_path
     _repository_create(target_repository)
     task_branch = "2026-07-30-behavior-eval"
     source_task_root = source_repository / ".worktree" / task_branch
-    _git_run(source_repository, ["worktree", "add", "-b", task_branch, str(source_task_root), "HEAD"])
+    _git_run(
+        source_repository,
+        ["worktree", "add", "-b", task_branch, str(source_task_root), "HEAD"],
+    )
     corpus_root = source_task_root / "skill_behavior_eval"
     corpus_root.mkdir()
     corpus_path = corpus_root / "corpus-v1.json"
@@ -401,7 +435,9 @@ def test_corpus_load_rejects_a_sibling_without_the_same_branch_worktree(tmp_path
         module._corpus_case_list_load(corpus_path)
 
 
-def test_corpus_load_uses_an_explicit_clean_synchronized_main_dependency(tmp_path: Path) -> None:
+def test_corpus_load_uses_an_explicit_clean_synchronized_main_dependency(
+    tmp_path: Path,
+) -> None:
     """A non-participant target may use main only through its explicit closed policy."""
 
     module = _module_load()
@@ -419,7 +455,10 @@ def test_corpus_load_uses_an_explicit_clean_synchronized_main_dependency(tmp_pat
     _git_run(target_repository, ["push", "--set-upstream", "origin", "main"])
     task_branch = "2026-07-30-behavior-eval"
     source_task_root = source_repository / ".worktree" / task_branch
-    _git_run(source_repository, ["worktree", "add", "-b", task_branch, str(source_task_root), "HEAD"])
+    _git_run(
+        source_repository,
+        ["worktree", "add", "-b", task_branch, str(source_task_root), "HEAD"],
+    )
     corpus_root = source_task_root / "skill_behavior_eval"
     corpus_root.mkdir()
     corpus_path = corpus_root / "corpus-v1.json"
@@ -476,7 +515,9 @@ def test_git_repository_root_preserves_non_utf8_filesystem_text(tmp_path: Path) 
     assert module._git_repository_root_get(repository, context="non-UTF-8 root") == repository.resolve()
 
 
-def test_case_evaluate_combines_activation_and_independent_judge(tmp_path: Path) -> None:
+def test_case_evaluate_combines_activation_and_independent_judge(
+    tmp_path: Path,
+) -> None:
     """Case success should require expected activation and every semantic invariant."""
 
     module = _module_load()
@@ -535,7 +576,9 @@ def test_case_evaluate_combines_activation_and_independent_judge(tmp_path: Path)
     assert "Do not use keyword" in call_list[1]["prompt"]
 
 
-def test_case_evaluate_reports_missing_and_forbidden_activations(tmp_path: Path) -> None:
+def test_case_evaluate_reports_missing_and_forbidden_activations(
+    tmp_path: Path,
+) -> None:
     """Activation failures should be independent from a passing semantic judge."""
 
     module = _module_load()
@@ -578,7 +621,9 @@ def test_case_evaluate_reports_missing_and_forbidden_activations(tmp_path: Path)
     assert result.forbidden_activated_skill_list == ("agent-workflows:code-audit",)
 
 
-def test_activation_normalization_requires_one_unambiguous_provider_identity(tmp_path: Path) -> None:
+def test_activation_normalization_requires_one_unambiguous_provider_identity(
+    tmp_path: Path,
+) -> None:
     """A short self-report should canonicalize only against one exact case identity."""
 
     module = _module_load()
@@ -654,3 +699,229 @@ def test_case_list_evaluate_preserves_corpus_order(monkeypatch: pytest.MonkeyPat
     )
 
     assert [result.id for result in result_list] == ["case-a", "case-b"]
+
+
+def test_isolated_codex_home_installs_exact_marketplace_plugins(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Behavior evaluation should bind plugin resolution to explicit worktree sources."""
+
+    module = _module_load()
+    source_codex_home = tmp_path / "source-codex-home"
+    source_codex_home.mkdir()
+    source_auth_path = source_codex_home / "auth.json"
+    source_auth_path.write_text("{}\n", encoding="utf-8")
+    marketplace_path = tmp_path / "provider-worktree"
+    plugin_path = marketplace_path / "plugins/provider-plugin"
+    plugin_path.mkdir(parents=True)
+    marketplace_manifest_path = marketplace_path / ".agents/plugins/marketplace.json"
+    marketplace_manifest_path.parent.mkdir(parents=True)
+    marketplace_manifest_path.write_text(
+        json.dumps(
+            {
+                "name": "provider-marketplace",
+                "plugins": [
+                    {
+                        "name": "provider-plugin",
+                        "source": {
+                            "source": "local",
+                            "path": "./plugins/provider-plugin",
+                        },
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    isolated_codex_home = tmp_path / "isolated-codex-home"
+    command_call_list: list[tuple[list[str], str, Path, str]] = []
+
+    monkeypatch.setenv("CODEX_HOME", str(source_codex_home))
+    monkeypatch.setattr(
+        module,
+        "_checked_codex_command_run",
+        lambda argument_list, *, codex_bin, codex_home, context: command_call_list.append(
+            (list(argument_list), codex_bin, codex_home, context)
+        ),
+    )
+
+    module._isolated_codex_home_prepare(
+        isolated_codex_home,
+        codex_bin="codex-test",
+        marketplace_path_list=[marketplace_path],
+        plugin_selector_list=["provider-plugin@provider-marketplace"],
+    )
+
+    assert (isolated_codex_home / "auth.json").is_symlink()
+    assert (isolated_codex_home / "auth.json").resolve() == source_auth_path
+    assert [call[0] for call in command_call_list] == [
+        ["plugin", "marketplace", "add", str(marketplace_path.resolve())],
+        ["plugin", "add", "provider-plugin@provider-marketplace"],
+    ]
+    assert all(call[1] == "codex-test" and call[2] == isolated_codex_home for call in command_call_list)
+
+
+def test_isolated_codex_home_rejects_partial_source_binding(tmp_path: Path) -> None:
+    """A source override without exact plugin selectors must fail closed."""
+
+    module = _module_load()
+
+    with pytest.raises(module.SkillBehaviorEvalError, match="must be supplied together"):
+        module._isolated_codex_home_prepare(
+            tmp_path / "isolated-codex-home",
+            codex_bin="codex",
+            marketplace_path_list=[tmp_path / "provider-worktree"],
+            plugin_selector_list=[],
+        )
+
+
+def test_isolated_codex_home_rejects_selector_outside_provided_marketplace(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A selector cannot resolve from a built-in or previously known marketplace."""
+
+    module = _module_load()
+    source_codex_home = tmp_path / "source-codex-home"
+    source_codex_home.mkdir()
+    (source_codex_home / "auth.json").write_text("{}\n", encoding="utf-8")
+    marketplace_path = tmp_path / "provider-worktree"
+    plugin_path = marketplace_path / "plugins/provider-plugin"
+    plugin_path.mkdir(parents=True)
+    manifest_path = marketplace_path / ".agents/plugins/marketplace.json"
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "name": "provided-marketplace",
+                "plugins": [
+                    {
+                        "name": "provider-plugin",
+                        "source": {
+                            "source": "local",
+                            "path": "./plugins/provider-plugin",
+                        },
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CODEX_HOME", str(source_codex_home))
+
+    with pytest.raises(
+        module.SkillBehaviorEvalError,
+        match="unprovided marketplace",
+    ):
+        module._isolated_codex_home_prepare(
+            tmp_path / "isolated-codex-home",
+            codex_bin="codex",
+            marketplace_path_list=[marketplace_path],
+            plugin_selector_list=["provider-plugin@another-marketplace"],
+        )
+
+
+@pytest.mark.parametrize(
+    ("source", "error_pattern"),
+    [
+        (
+            {"source": "git", "url": "https://example.invalid/provider.git"},
+            "must be one local path",
+        ),
+        (
+            {"source": "local", "path": "../outside-plugin"},
+            "escapes its provided marketplace",
+        ),
+    ],
+)
+def test_isolated_codex_home_rejects_non_worktree_plugin_source(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    source: dict[str, str],
+    error_pattern: str,
+) -> None:
+    """An exact marketplace binding cannot redirect a selected plugin elsewhere."""
+
+    module = _module_load()
+    source_codex_home = tmp_path / "source-codex-home"
+    source_codex_home.mkdir()
+    (source_codex_home / "auth.json").write_text("{}\n", encoding="utf-8")
+    marketplace_path = tmp_path / "provider-worktree"
+    manifest_path = marketplace_path / ".agents/plugins/marketplace.json"
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "name": "provided-marketplace",
+                "plugins": [{"name": "provider-plugin", "source": source}],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CODEX_HOME", str(source_codex_home))
+
+    with pytest.raises(module.SkillBehaviorEvalError, match=error_pattern):
+        module._isolated_codex_home_prepare(
+            tmp_path / "isolated-codex-home",
+            codex_bin="codex",
+            marketplace_path_list=[marketplace_path],
+            plugin_selector_list=["provider-plugin@provided-marketplace"],
+        )
+
+
+def test_expected_plugin_source_binding_rejects_an_omitted_provider(
+    tmp_path: Path,
+) -> None:
+    """An isolated run must install every provider expected by its selected cases."""
+
+    module = _module_load()
+    corpus_path = tmp_path / "corpus.json"
+    _corpus_write(
+        corpus_path,
+        expected_skill_list=[
+            "agent-workflows:goal-brainstorm",
+            "workflow-container-agent-tools:workflow-container-developer",
+        ],
+    )
+    case_list = module._selected_case_list_get(
+        case_id_list=[],
+        corpus_path_list=[corpus_path],
+    )
+
+    with pytest.raises(
+        module.SkillBehaviorEvalError,
+        match="workflow-container-agent-tools",
+    ):
+        module._expected_plugin_source_binding_validate(
+            case_list,
+            ["agent-workflows@agent-plugins"],
+        )
+
+
+def test_expected_plugin_source_binding_accepts_complete_provider_set(
+    tmp_path: Path,
+) -> None:
+    """Extra marketplaces may coexist with a complete expected provider set."""
+
+    module = _module_load()
+    corpus_path = tmp_path / "corpus.json"
+    _corpus_write(
+        corpus_path,
+        expected_skill_list=["project-standards:python-developer"],
+    )
+    case_list = module._selected_case_list_get(
+        case_id_list=[],
+        corpus_path_list=[corpus_path],
+    )
+
+    module._expected_plugin_source_binding_validate(
+        case_list,
+        [
+            "project-standards@project-standards",
+            "agent-workflows@agent-plugins",
+        ],
+    )

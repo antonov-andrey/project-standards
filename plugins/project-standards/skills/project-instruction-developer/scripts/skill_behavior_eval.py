@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import tempfile
+from contextlib import ExitStack
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
@@ -92,6 +93,7 @@ class ModelInvocationConfig:
     model: str
     reasoning_effort: str
     timeout_seconds: int
+    codex_home: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -170,6 +172,27 @@ def _argument_parser_get() -> argparse.ArgumentParser:
         "--model",
         default=DEFAULT_MODEL,
         help=f"Target model for generation and independent judging; default: {DEFAULT_MODEL}.",
+    )
+    parser.add_argument(
+        "--plugin-marketplace",
+        action="append",
+        dest="plugin_marketplace_path_list",
+        default=[],
+        type=Path,
+        help=(
+            "Exact local plugin-marketplace root to install into an isolated Codex home; "
+            "repeat for multiple providers. Requires at least one --plugin."
+        ),
+    )
+    parser.add_argument(
+        "--plugin",
+        action="append",
+        dest="plugin_selector_list",
+        default=[],
+        help=(
+            "Exact plugin selector NAME@MARKETPLACE to install for the evaluation; repeat as needed. "
+            "Requires at least one --plugin-marketplace."
+        ),
     )
     parser.add_argument(
         "--output",
@@ -791,11 +814,15 @@ def _codex_payload_get(
             str(output_path),
             "-",
         ]
+        environment_by_name_map = os.environ.copy()
+        if invocation_config.codex_home is not None:
+            environment_by_name_map["CODEX_HOME"] = str(invocation_config.codex_home)
         try:
             completed_process = subprocess.run(
                 command,
                 check=False,
                 capture_output=True,
+                env=environment_by_name_map,
                 input=prompt,
                 text=True,
                 timeout=invocation_config.timeout_seconds,
@@ -815,6 +842,198 @@ def _codex_payload_get(
     if not isinstance(payload, dict):
         raise SkillBehaviorEvalError("Codex structured output must be an object")
     return payload
+
+
+def _checked_codex_command_run(
+    argument_list: Sequence[str],
+    *,
+    codex_bin: str,
+    codex_home: Path,
+    context: str,
+) -> None:
+    """Run one isolated Codex plugin-setup command."""
+
+    environment_by_name_map = os.environ.copy()
+    environment_by_name_map["CODEX_HOME"] = str(codex_home)
+    try:
+        completed_process = subprocess.run(
+            [codex_bin, *argument_list],
+            check=False,
+            capture_output=True,
+            env=environment_by_name_map,
+            text=True,
+            timeout=DEFAULT_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise SkillBehaviorEvalError(f"{context}: Codex command failed: {exc}") from exc
+    if completed_process.returncode != 0:
+        stderr_tail = completed_process.stderr[-4000:].strip()
+        stdout_tail = completed_process.stdout[-4000:].strip()
+        raise SkillBehaviorEvalError(
+            f"{context}: Codex exited with {completed_process.returncode}; "
+            f"stdout={stdout_tail!r}; stderr={stderr_tail!r}"
+        )
+
+
+def _isolated_codex_home_prepare(
+    codex_home: Path,
+    *,
+    codex_bin: str,
+    marketplace_path_list: Sequence[Path],
+    plugin_selector_list: Sequence[str],
+) -> None:
+    """Install exact worktree plugin sources into one ephemeral Codex home."""
+
+    if bool(marketplace_path_list) != bool(plugin_selector_list):
+        raise SkillBehaviorEvalError(
+            "--plugin-marketplace and --plugin must be supplied together so the evaluated source is explicit"
+        )
+    if not marketplace_path_list:
+        return
+
+    normalized_plugin_selector_list = _plugin_selector_tuple_normalize(plugin_selector_list)
+
+    resolved_marketplace_path_list: list[Path] = []
+    plugin_source_path_by_name_by_marketplace_name_map: dict[str, dict[str, Path]] = {}
+    for marketplace_path in marketplace_path_list:
+        resolved_marketplace_path = marketplace_path.expanduser().resolve()
+        marketplace_manifest_path = resolved_marketplace_path / ".agents/plugins/marketplace.json"
+        if not marketplace_manifest_path.is_file():
+            raise SkillBehaviorEvalError(
+                f"plugin marketplace has no .agents/plugins/marketplace.json: {resolved_marketplace_path}"
+            )
+        if resolved_marketplace_path in resolved_marketplace_path_list:
+            raise SkillBehaviorEvalError(f"duplicate plugin marketplace: {resolved_marketplace_path}")
+        resolved_marketplace_path_list.append(resolved_marketplace_path)
+
+        try:
+            marketplace_payload = json.loads(marketplace_manifest_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise SkillBehaviorEvalError(
+                f"plugin marketplace manifest is unavailable or invalid: {marketplace_manifest_path}: {exc}"
+            ) from exc
+        if not isinstance(marketplace_payload, dict):
+            raise SkillBehaviorEvalError(f"plugin marketplace manifest must be an object: {marketplace_manifest_path}")
+        marketplace_name = marketplace_payload.get("name")
+        plugin_list = marketplace_payload.get("plugins")
+        if (
+            not isinstance(marketplace_name, str)
+            or not marketplace_name.strip()
+            or not isinstance(plugin_list, list)
+            or any(
+                not isinstance(plugin, dict) or not isinstance(plugin.get("name"), str) or not plugin["name"].strip()
+                for plugin in plugin_list
+            )
+        ):
+            raise SkillBehaviorEvalError(
+                f"plugin marketplace manifest has no usable name/plugin inventory: {marketplace_manifest_path}"
+            )
+        normalized_marketplace_name = marketplace_name.strip()
+        if normalized_marketplace_name in plugin_source_path_by_name_by_marketplace_name_map:
+            raise SkillBehaviorEvalError(f"duplicate plugin marketplace name: {normalized_marketplace_name}")
+        plugin_source_path_by_name_map: dict[str, Path] = {}
+        for plugin in plugin_list:
+            plugin_name = plugin["name"].strip()
+            if plugin_name in plugin_source_path_by_name_map:
+                raise SkillBehaviorEvalError(
+                    f"duplicate plugin name in marketplace {normalized_marketplace_name}: " f"{plugin_name}"
+                )
+            source = plugin.get("source")
+            if (
+                not isinstance(source, dict)
+                or source.get("source") != "local"
+                or not isinstance(source.get("path"), str)
+                or not source["path"].strip()
+            ):
+                raise SkillBehaviorEvalError(
+                    f"plugin source must be one local path in its provided marketplace: "
+                    f"{plugin_name}@{normalized_marketplace_name}"
+                )
+            raw_plugin_source_path = resolved_marketplace_path / source["path"]
+            plugin_source_path = raw_plugin_source_path.resolve()
+            try:
+                plugin_source_path.relative_to(resolved_marketplace_path)
+            except ValueError as exc:
+                raise SkillBehaviorEvalError(
+                    f"plugin source escapes its provided marketplace: " f"{plugin_name}@{normalized_marketplace_name}"
+                ) from exc
+            if Path(os.path.abspath(raw_plugin_source_path)) != plugin_source_path or not plugin_source_path.is_dir():
+                raise SkillBehaviorEvalError(
+                    f"plugin source must be one physical directory in its provided marketplace: "
+                    f"{plugin_name}@{normalized_marketplace_name}"
+                )
+            plugin_source_path_by_name_map[plugin_name] = plugin_source_path
+        plugin_source_path_by_name_by_marketplace_name_map[normalized_marketplace_name] = plugin_source_path_by_name_map
+
+    for plugin_selector in normalized_plugin_selector_list:
+        plugin_name, marketplace_name = plugin_selector.split("@", 1)
+        if marketplace_name not in plugin_source_path_by_name_by_marketplace_name_map:
+            raise SkillBehaviorEvalError(f"plugin selector references an unprovided marketplace: {plugin_selector}")
+        if plugin_name not in plugin_source_path_by_name_by_marketplace_name_map[marketplace_name]:
+            raise SkillBehaviorEvalError(f"plugin selector is absent from its provided marketplace: {plugin_selector}")
+
+    source_codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser().resolve()
+    source_auth_path = source_codex_home / "auth.json"
+    if not source_auth_path.is_file():
+        raise SkillBehaviorEvalError(
+            f"cannot prepare isolated Codex home because authentication file is absent: {source_auth_path}"
+        )
+    codex_home.mkdir(parents=True, exist_ok=False)
+    (codex_home / "auth.json").symlink_to(source_auth_path)
+
+    for resolved_marketplace_path in resolved_marketplace_path_list:
+        _checked_codex_command_run(
+            ["plugin", "marketplace", "add", str(resolved_marketplace_path)],
+            codex_bin=codex_bin,
+            codex_home=codex_home,
+            context=f"cannot add plugin marketplace {resolved_marketplace_path}",
+        )
+
+    for plugin_selector in normalized_plugin_selector_list:
+        _checked_codex_command_run(
+            ["plugin", "add", plugin_selector],
+            codex_bin=codex_bin,
+            codex_home=codex_home,
+            context=f"cannot install plugin {plugin_selector}",
+        )
+
+
+def _plugin_selector_tuple_normalize(
+    plugin_selector_list: Sequence[str],
+) -> tuple[str, ...]:
+    """Validate and normalize exact plugin selectors before installation."""
+
+    normalized_plugin_selector_list = tuple(selector.strip() for selector in plugin_selector_list)
+    if any(
+        selector.count("@") != 1 or not all(part.strip() for part in selector.split("@", 1))
+        for selector in normalized_plugin_selector_list
+    ):
+        raise SkillBehaviorEvalError("every --plugin must use exact NAME@MARKETPLACE form")
+    if len(normalized_plugin_selector_list) != len(set(normalized_plugin_selector_list)):
+        raise SkillBehaviorEvalError("duplicate --plugin selectors are forbidden")
+    return normalized_plugin_selector_list
+
+
+def _expected_plugin_source_binding_validate(
+    case_list: Sequence[SkillBehaviorCase],
+    plugin_selector_list: Sequence[str],
+) -> None:
+    """Require every expected provider in the exact isolated source set."""
+
+    installed_plugin_name_set = {
+        selector.split("@", 1)[0] for selector in _plugin_selector_tuple_normalize(plugin_selector_list)
+    }
+    expected_plugin_name_set = {
+        skill_name.split(":", 1)[0]
+        for case in case_list
+        for skill_name in case.expected_skill_list
+        if ":" in skill_name
+    }
+    missing_plugin_name_list = sorted(expected_plugin_name_set - installed_plugin_name_set)
+    if missing_plugin_name_list:
+        raise SkillBehaviorEvalError(
+            "isolated source binding omits plugins required by selected cases: " + ", ".join(missing_plugin_name_list)
+        )
 
 
 def _generation_payload_validate(payload: dict[str, Any], *, case: SkillBehaviorCase) -> dict[str, Any]:
@@ -988,12 +1207,21 @@ def _result_print(result: SkillBehaviorCaseResult) -> None:
     status = "PASS" if result.passed else "FAIL"
     print(f"{status} {result.suite}:{result.id}", flush=True)
     if result.missing_expected_skill_list:
-        print(f"  missing_expected={','.join(result.missing_expected_skill_list)}", flush=True)
+        print(
+            f"  missing_expected={','.join(result.missing_expected_skill_list)}",
+            flush=True,
+        )
     if result.forbidden_activated_skill_list:
-        print(f"  forbidden_activated={','.join(result.forbidden_activated_skill_list)}", flush=True)
+        print(
+            f"  forbidden_activated={','.join(result.forbidden_activated_skill_list)}",
+            flush=True,
+        )
     for invariant_result in result.semantic_invariant_result_list:
         if not invariant_result.passed:
-            print(f"  invariant_failed={invariant_result.id}: {invariant_result.reason}", flush=True)
+            print(
+                f"  invariant_failed={invariant_result.id}: {invariant_result.reason}",
+                flush=True,
+            )
 
 
 def _case_list_evaluate(
@@ -1035,17 +1263,40 @@ def main(argv_list: Sequence[str] | None = None) -> int:
             for case in case_list:
                 print(f"{case.suite}:{case.id}")
             return 0
-        invocation_config = ModelInvocationConfig(
-            codex_bin=args.codex_bin,
-            model=args.model,
-            reasoning_effort=args.reasoning_effort,
-            timeout_seconds=args.timeout_seconds,
-        )
-        result_list = _case_list_evaluate(
-            case_list,
-            concurrency=args.concurrency,
-            invocation_config=invocation_config,
-        )
+        with ExitStack() as exit_stack:
+            codex_home: Path | None = None
+            if args.plugin_marketplace_path_list or args.plugin_selector_list:
+                _expected_plugin_source_binding_validate(
+                    case_list,
+                    args.plugin_selector_list,
+                )
+                temporary_codex_home_parent = Path(
+                    exit_stack.enter_context(
+                        tempfile.TemporaryDirectory(
+                            prefix="skill-behavior-eval-",
+                            dir=Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser(),
+                        )
+                    )
+                )
+                codex_home = temporary_codex_home_parent / "home"
+                _isolated_codex_home_prepare(
+                    codex_home,
+                    codex_bin=args.codex_bin,
+                    marketplace_path_list=args.plugin_marketplace_path_list,
+                    plugin_selector_list=args.plugin_selector_list,
+                )
+            invocation_config = ModelInvocationConfig(
+                codex_bin=args.codex_bin,
+                model=args.model,
+                reasoning_effort=args.reasoning_effort,
+                timeout_seconds=args.timeout_seconds,
+                codex_home=codex_home,
+            )
+            result_list = _case_list_evaluate(
+                case_list,
+                concurrency=args.concurrency,
+                invocation_config=invocation_config,
+            )
         result_payload = _result_payload_get(
             invocation_config=invocation_config,
             result_list=result_list,
