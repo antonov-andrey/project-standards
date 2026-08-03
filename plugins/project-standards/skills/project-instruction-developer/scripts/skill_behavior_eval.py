@@ -63,7 +63,7 @@ class SkillBehaviorEvalError(RuntimeError):
     """Report an invalid corpus, model result, or Codex execution."""
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SemanticInvariant:
     """Define one semantic property required from the generated response."""
 
@@ -71,7 +71,7 @@ class SemanticInvariant:
     text: str
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SkillBehaviorCase:
     """Store one resolved activation and output-evaluation scenario."""
 
@@ -85,7 +85,7 @@ class SkillBehaviorCase:
     working_directory: Path
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ModelInvocationConfig:
     """Store one immutable Codex model invocation configuration."""
 
@@ -96,7 +96,7 @@ class ModelInvocationConfig:
     codex_home: Path | None = None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SemanticInvariantResult:
     """Store one judge verdict."""
 
@@ -105,7 +105,7 @@ class SemanticInvariantResult:
     reason: str
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SkillBehaviorCaseResult:
     """Store complete activation and semantic results for one case."""
 
