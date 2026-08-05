@@ -1,6 +1,6 @@
 ---
 name: project-foundation
-description: Use for every task in a governed repository; owns ownership, execution integrity, reporting, UTC data, and harness configuration.
+description: Use for every task, including read-only observation, in a governed repository; owns ownership, execution integrity, reporting, UTC data, and harness configuration.
 ---
 
 # Project Foundation
