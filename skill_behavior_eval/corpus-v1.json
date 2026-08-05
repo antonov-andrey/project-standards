@@ -223,7 +223,7 @@
     {
       "id": "indirect-kubernetes",
       "working_directory": "../../workflow-control-center",
-      "working_directory_mode": "same-branch",
+      "working_directory_mode": "synchronized-main",
       "prompt": "Add a restart-resumable one-off Kubernetes Job with explicit service account, requests and limits, runtime Secret use, retained failure evidence, readiness-dependent completion, and cleanup after success. Give the required implementation and live verification boundaries without changing files.",
       "expected_skill_list": [
         "project-standards:project-foundation",
@@ -263,7 +263,7 @@
     {
       "id": "overlap-python-cli-config-logging",
       "working_directory": "../../workflow-control-center",
-      "working_directory_mode": "same-branch",
+      "working_directory_mode": "synchronized-main",
       "prompt": "Add a directly executable Python CLI that reads ordinary options from generated environment bindings, keeps a secret environment-only, loads dotenv once from the explicit project root, initializes shared logging once without creating or injecting logger objects, exposes --help through normal startup, and has a bounded --test mode. Give the implementation and verification contract without changing files.",
       "expected_skill_list": [
         "project-standards:project-foundation",
@@ -290,7 +290,7 @@
     {
       "id": "indirect-vcs-dependency",
       "working_directory": "../../workflow-control-center",
-      "working_directory_mode": "same-branch",
+      "working_directory_mode": "synchronized-main",
       "prompt": "Update requirements-dev.txt to consume the current project-standards distribution directly from its GitHub repository. Give the exact dependency line and governing revision policy without changing files.",
       "expected_skill_list": [
         "project-standards:project-foundation"
@@ -336,7 +336,7 @@
     {
       "id": "indirect-python-orchestration-ownership",
       "working_directory": "../../workflow-control-center",
-      "working_directory_mode": "same-branch",
+      "working_directory_mode": "synchronized-main",
       "prompt": "Review a proposed change that adds S3 artifact cleanup, SQL lifecycle state, image publication, and retry policy directly to an existing Python deployment coordinator. Explain the required ownership refactor and semantic verification without changing files.",
       "expected_skill_list": [
         "project-standards:project-foundation",
@@ -360,7 +360,7 @@
     {
       "id": "indirect-idempotent-explicit-cleanup",
       "working_directory": "../../workflow-control-center",
-      "working_directory_mode": "same-branch",
+      "working_directory_mode": "synchronized-main",
       "prompt": "Design an explicitly authorized cleanup command for one exact application cache namespace. Some object-store keys, local cache files, and job records may already be absent, stale, or changed. Explain which checks may block deletion and which must not, without changing files.",
       "expected_skill_list": [
         "project-standards:project-foundation"

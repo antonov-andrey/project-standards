@@ -141,6 +141,7 @@ def test_bundled_corpus_declares_each_working_directory_revision_policy() -> Non
     synchronized_main_directory_set = {
         "../../compose-mysql",
         "../../scrapy-next-deprecated",
+        "../../workflow-control-center",
     }
 
     assert case_list
@@ -503,10 +504,10 @@ def test_corpus_load_rejects_a_sibling_without_the_same_branch_worktree(
         module._corpus_case_list_load(corpus_path)
 
 
-def test_corpus_load_uses_an_explicit_clean_synchronized_main_dependency(
+def test_corpus_load_enforces_an_explicit_synchronized_main_dependency(
     tmp_path: Path,
 ) -> None:
-    """A non-participant target may use main only through its explicit closed policy.
+    """A non-participant target must use the clean synchronized canonical main worktree.
 
     Args:
         tmp_path: Temporary directory path.
@@ -527,9 +528,14 @@ def test_corpus_load_uses_an_explicit_clean_synchronized_main_dependency(
     _git_run(target_repository, ["push", "--set-upstream", "origin", "main"])
     task_branch = "2026-07-30-behavior-eval"
     source_task_root = source_repository / ".worktree" / task_branch
+    target_task_root = tmp_path / "target-task-root"
     _git_run(
         source_repository,
         ["worktree", "add", "-b", task_branch, str(source_task_root), "HEAD"],
+    )
+    _git_run(
+        target_repository,
+        ["worktree", "add", "-b", task_branch, str(target_task_root), "HEAD"],
     )
     corpus_root = source_task_root / "skill_behavior_eval"
     corpus_root.mkdir()
@@ -545,6 +551,12 @@ def test_corpus_load_uses_an_explicit_clean_synchronized_main_dependency(
     assert case.working_directory == (target_repository / "domain").resolve()
     (target_repository / "dirty.txt").write_text("uncommitted\n", encoding="utf-8")
     with pytest.raises(module.SkillBehaviorEvalError, match="target main worktree is not clean"):
+        module._corpus_case_list_load(corpus_path)
+    (target_repository / "dirty.txt").unlink()
+    (target_repository / "README.md").write_text("diverged\n", encoding="utf-8")
+    _git_run(target_repository, ["add", "README.md"])
+    _git_run(target_repository, ["commit", "-m", "Diverge target main"])
+    with pytest.raises(module.SkillBehaviorEvalError, match="target main does not equal origin/main"):
         module._corpus_case_list_load(corpus_path)
 
 
