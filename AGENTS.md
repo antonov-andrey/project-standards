@@ -9,6 +9,8 @@
 
 ## Required Standards
 
+- `linear-agent-tools:task-cleanup`
+- `linear-agent-tools:task-implement`
 - `project-standards:aws-cloudformation-developer`
 - `project-standards:docker-compose-developer`
 - `project-standards:http-api-client-developer`
@@ -61,8 +63,8 @@ project/
 - `pyproject.toml`: canonical Python distribution, entrypoint, build-asset, dependency, and provider pytest configuration.
 - `skill_behavior_eval/`: versioned model-based activation and semantic output-evaluation corpus for this provider.
 - `test/`: root behavior-test owner for the installable distribution, runner, scope runtime, and explicit pytest plugin.
-- `.worktree/`: task-worktree container whose reusable semantics are owned by `agent-workflows:goal-brainstorm`.
-- `worktree-bootstrap.yaml`: repository bootstrap-resource binding for the reusable manifest contract owned by `agent-workflows:goal-brainstorm`; task artifacts themselves live only in `project-goals`.
+- `.worktree/`: Linear task-worktree container governed by `linear-agent-tools:task-implement` and `linear-agent-tools:task-cleanup`.
+- `worktree-bootstrap.yaml`: project bootstrap-resource binding governed by `linear-agent-tools:task-implement` and `linear-agent-tools:task-cleanup`.
 
 ## Commands
 
