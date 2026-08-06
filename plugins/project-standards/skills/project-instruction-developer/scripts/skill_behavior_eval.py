@@ -37,6 +37,13 @@ _SEMVER_PATTERN = re.compile(
     r"(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?"
     r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
 )
+_YAML_12_NON_STRING_PLAIN_SCALAR_PATTERN = re.compile(
+    r"(?:~|null|Null|NULL|true|True|TRUE|false|False|FALSE|"
+    r"[-+]?(?:0|[1-9][0-9]*|0o[0-7]+|0x[0-9a-fA-F]+)|"
+    r"[-+]?(?:(?:0|[1-9][0-9]*)\.[0-9]*(?:[eE][-+]?[0-9]+)?|"
+    r"\.[0-9]+(?:[eE][-+]?[0-9]+)?|(?:0|[1-9][0-9]*)(?:[eE][-+]?[0-9]+)|"
+    r"\.inf|\.Inf|\.INF|\.nan|\.NaN|\.NAN))"
+)
 
 _GENERATION_OUTPUT_SCHEMA: dict[str, Any] = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -52,6 +59,18 @@ _GENERATION_OUTPUT_SCHEMA: dict[str, Any] = {
     },
 }
 _SKILL_FRONTMATTER_FIELD_SET = {"description", "name"}
+
+_CASE_FAILURE_MESSAGE_BY_CODE_MAP = {
+    "case-internal-failure": "Case evaluation failed internally.",
+    "case-not-submitted": "Case evaluation was not submitted.",
+    "case-submission-failed": "Case evaluation submission failed.",
+    "codex-invocation-start-failed": "Codex invocation could not start.",
+    "codex-output-invalid": "Codex structured output is invalid.",
+    "codex-process-failed": "Codex invocation completed unsuccessfully.",
+    "codex-usage-invalid": "Codex completion usage is invalid.",
+    "generation-validation-failed": "Generation result validation failed.",
+    "judge-validation-failed": "Judge result validation failed.",
+}
 
 _JUDGE_OUTPUT_SCHEMA: dict[str, Any] = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -192,6 +211,35 @@ class ModelInvocationResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ModelInvocationFailure:
+    """Carry one sanitized invocation failure and optional exact usage."""
+
+    error_code: str
+    error_message: str
+    usage: CodexUsage | None
+
+    def __post_init__(self) -> None:
+        """Require one exact closed failure identity."""
+
+        if _CASE_FAILURE_MESSAGE_BY_CODE_MAP.get(self.error_code) != self.error_message:
+            raise SkillBehaviorEvalError("Model invocation failure identity is not closed")
+
+
+class ModelInvocationError(SkillBehaviorEvalError):
+    """Transport one sanitized invocation failure without raw process output."""
+
+    def __init__(self, failure: ModelInvocationFailure) -> None:
+        """Store one closed invocation failure.
+
+        Args:
+            failure: Sanitized invocation failure and optional usage.
+        """
+
+        super().__init__(failure.error_message)
+        self.failure = failure
+
+
+@dataclass(frozen=True, slots=True)
 class SemanticInvariantResult:
     """Store one judge verdict."""
 
@@ -222,9 +270,16 @@ class SkillBehaviorCaseFailure:
 
     codex_usage_generation: CodexUsage | None
     codex_usage_judge: CodexUsage | None
-    error: str
+    error_code: str
+    error_message: str
     id: str
     suite: str
+
+    def __post_init__(self) -> None:
+        """Require one exact closed failure identity."""
+
+        if _CASE_FAILURE_MESSAGE_BY_CODE_MAP.get(self.error_code) != self.error_message:
+            raise SkillBehaviorEvalError("Case failure identity is not closed")
 
 
 class SkillBehaviorCaseEvaluationError(SkillBehaviorEvalError):
@@ -237,7 +292,7 @@ class SkillBehaviorCaseEvaluationError(SkillBehaviorEvalError):
             failure: Failed case and available exact counters.
         """
 
-        super().__init__(failure.error)
+        super().__init__(failure.error_message)
         self.failure = failure
 
 
@@ -299,7 +354,8 @@ class SkillBehaviorEvaluationAttempt:
                     {
                         "codex_usage_generation": asdict(generation_usage) if generation_usage is not None else None,
                         "codex_usage_judge": asdict(judge_usage) if judge_usage is not None else None,
-                        "error": failure.error,
+                        "error_code": failure.error_code,
+                        "error_message": failure.error_message,
                         "id": failure.id,
                         "outcome": "failed",
                         "suite": failure.suite,
@@ -315,7 +371,8 @@ class SkillBehaviorEvaluationAttempt:
                     {
                         "codex_usage_generation": asdict(generation_usage),
                         "codex_usage_judge": asdict(judge_usage),
-                        "error": "",
+                        "error_code": None,
+                        "error_message": None,
                         "id": result.id,
                         "outcome": "completed",
                         "suite": result.suite,
@@ -350,6 +407,54 @@ class SkillBehaviorEvaluationAttempt:
 
 
 ModelCall = Callable[[str, Path, dict[str, Any], ModelInvocationConfig], ModelInvocationResult]
+
+
+def _json_object_duplicate_rejecting_get(pair_list: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Build one JSON object while rejecting every duplicate key.
+
+    Args:
+        pair_list: Decoder-provided ordered object members.
+
+    Returns:
+        Duplicate-free JSON object.
+    """
+
+    payload: dict[str, Any] = {}
+    for key, value in pair_list:
+        if key in payload:
+            raise SkillBehaviorEvalError(f"JSON object repeats key: {key}")
+        payload[key] = value
+    return payload
+
+
+def _json_duplicate_rejecting_load(text: str, *, context: str) -> Any:
+    """Parse one JSON document through the shared duplicate-rejecting boundary.
+
+    Args:
+        text: Complete JSON document text.
+        context: Sanitized document owner context.
+
+    Returns:
+        Parsed duplicate-free JSON value.
+    """
+
+    try:
+        return json.loads(text, object_pairs_hook=_json_object_duplicate_rejecting_get)
+    except (json.JSONDecodeError, SkillBehaviorEvalError) as error:
+        raise SkillBehaviorEvalError(f"{context} is invalid") from error
+
+
+def _is_yaml_12_plain_scalar_string(node: ScalarNode) -> bool:
+    """Return whether one scalar node has YAML 1.2 string semantics.
+
+    Args:
+        node: YAML scalar node.
+
+    Returns:
+        True when the scalar is quoted or has no YAML 1.2 core non-string form.
+    """
+
+    return node.style is not None or _YAML_12_NON_STRING_PLAIN_SCALAR_PATTERN.fullmatch(node.value) is None
 
 
 def _positive_int_get(value: str) -> int:
@@ -1221,23 +1326,59 @@ def _codex_payload_get(
                 input=prompt,
                 text=True,
             )
-        except OSError as exc:
-            raise SkillBehaviorEvalError(f"Codex invocation failed: {exc}") from exc
+        except OSError as error:
+            raise ModelInvocationError(
+                ModelInvocationFailure(
+                    error_code="codex-invocation-start-failed",
+                    error_message=_CASE_FAILURE_MESSAGE_BY_CODE_MAP["codex-invocation-start-failed"],
+                    usage=None,
+                )
+            ) from error
+        usage: CodexUsage | None = None
+        usage_error: SkillBehaviorEvalError | None = None
+        try:
+            usage = _codex_usage_get(completed_process.stdout)
+        except SkillBehaviorEvalError as error:
+            usage_error = error
         if completed_process.returncode != 0:
-            stderr_tail = completed_process.stderr[-4000:].strip()
-            stdout_tail = completed_process.stdout[-4000:].strip()
-            raise SkillBehaviorEvalError(
-                f"Codex exited with {completed_process.returncode}; stdout={stdout_tail!r}; stderr={stderr_tail!r}"
+            raise ModelInvocationError(
+                ModelInvocationFailure(
+                    error_code="codex-process-failed",
+                    error_message=_CASE_FAILURE_MESSAGE_BY_CODE_MAP["codex-process-failed"],
+                    usage=usage,
+                )
             )
+        if usage_error is not None:
+            raise ModelInvocationError(
+                ModelInvocationFailure(
+                    error_code="codex-usage-invalid",
+                    error_message=_CASE_FAILURE_MESSAGE_BY_CODE_MAP["codex-usage-invalid"],
+                    usage=None,
+                )
+            ) from usage_error
         try:
             payload = json.loads(output_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise SkillBehaviorEvalError(f"Codex returned invalid structured output: {exc}") from exc
+        except (OSError, json.JSONDecodeError) as error:
+            raise ModelInvocationError(
+                ModelInvocationFailure(
+                    error_code="codex-output-invalid",
+                    error_message=_CASE_FAILURE_MESSAGE_BY_CODE_MAP["codex-output-invalid"],
+                    usage=usage,
+                )
+            ) from error
     if not isinstance(payload, dict):
-        raise SkillBehaviorEvalError("Codex structured output must be an object")
+        raise ModelInvocationError(
+            ModelInvocationFailure(
+                error_code="codex-output-invalid",
+                error_message=_CASE_FAILURE_MESSAGE_BY_CODE_MAP["codex-output-invalid"],
+                usage=usage,
+            )
+        )
+    if usage is None:
+        raise SkillBehaviorEvalError("Successful Codex invocation usage is absent")
     return ModelInvocationResult(
         payload=payload,
-        usage=_codex_usage_get(completed_process.stdout),
+        usage=usage,
     )
 
 
@@ -1337,8 +1478,11 @@ def _preinstalled_plugin_source_binding_validate(
         resolved_marketplace_path_list.append(resolved_marketplace_path)
 
         try:
-            marketplace_payload = json.loads(marketplace_manifest_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            marketplace_payload = _json_duplicate_rejecting_load(
+                marketplace_manifest_path.read_text(encoding="utf-8"),
+                context=f"plugin marketplace manifest {marketplace_manifest_path}",
+            )
+        except (OSError, UnicodeDecodeError, SkillBehaviorEvalError) as exc:
             raise SkillBehaviorEvalError(
                 f"plugin marketplace manifest is unavailable or invalid: {marketplace_manifest_path}: {exc}"
             ) from exc
@@ -1407,8 +1551,11 @@ def _preinstalled_plugin_source_binding_validate(
         plugin_source_path = plugin_source_path_by_name_by_marketplace_name_map[marketplace_name][plugin_name]
         plugin_manifest_path = plugin_source_path / ".codex-plugin/plugin.json"
         try:
-            plugin_manifest = json.loads(plugin_manifest_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            plugin_manifest = _json_duplicate_rejecting_load(
+                plugin_manifest_path.read_text(encoding="utf-8"),
+                context=f"plugin manifest {plugin_manifest_path}",
+            )
+        except (OSError, UnicodeDecodeError, SkillBehaviorEvalError) as exc:
             raise SkillBehaviorEvalError(f"plugin manifest is unavailable or invalid: {plugin_manifest_path}") from exc
         if not isinstance(plugin_manifest, dict) or plugin_manifest.get("name") != plugin_name:
             raise SkillBehaviorEvalError(f"plugin manifest identity differs from its selector: {plugin_selector}")
@@ -1639,6 +1786,7 @@ def _case_evaluate(
 
     generation_usage: CodexUsage | None = None
     judge_usage: CodexUsage | None = None
+    evaluation_stage = "generation"
     try:
         generation_invocation = model_call(
             _generation_prompt_get(case),
@@ -1661,6 +1809,7 @@ def _case_evaluate(
             plugin_source_path_by_name_map,
             activated_skill_list=activated_skill_list,
         )
+        evaluation_stage = "judge"
         judge_invocation = model_call(
             _judge_prompt_get(case=case, generation_payload=generation_payload),
             case.working_directory,
@@ -1698,13 +1847,40 @@ def _case_evaluate(
         )
     except SkillBehaviorCaseEvaluationError:
         raise
-    except Exception as error:
-        error_text = str(error) or type(error).__name__
+    except ModelInvocationError as error:
+        if evaluation_stage == "generation":
+            generation_usage = error.failure.usage
+        else:
+            judge_usage = error.failure.usage
         raise SkillBehaviorCaseEvaluationError(
             SkillBehaviorCaseFailure(
                 codex_usage_generation=generation_usage,
                 codex_usage_judge=judge_usage,
-                error=error_text,
+                error_code=error.failure.error_code,
+                error_message=error.failure.error_message,
+                id=case.id,
+                suite=case.suite,
+            )
+        ) from error
+    except SkillBehaviorEvalError as error:
+        error_code = f"{evaluation_stage}-validation-failed"
+        raise SkillBehaviorCaseEvaluationError(
+            SkillBehaviorCaseFailure(
+                codex_usage_generation=generation_usage,
+                codex_usage_judge=judge_usage,
+                error_code=error_code,
+                error_message=_CASE_FAILURE_MESSAGE_BY_CODE_MAP[error_code],
+                id=case.id,
+                suite=case.suite,
+            )
+        ) from error
+    except Exception as error:
+        raise SkillBehaviorCaseEvaluationError(
+            SkillBehaviorCaseFailure(
+                codex_usage_generation=generation_usage,
+                codex_usage_judge=judge_usage,
+                error_code="case-internal-failure",
+                error_message=_CASE_FAILURE_MESSAGE_BY_CODE_MAP["case-internal-failure"],
                 id=case.id,
                 suite=case.suite,
             )
@@ -1735,8 +1911,11 @@ def _plugin_source_path_validate(plugin_name: str, plugin_source_path: Path) -> 
         raise SkillBehaviorEvalError(f"activated provider source is not one physical directory: {plugin_name}")
     plugin_manifest_path = resolved_plugin_source_path / ".codex-plugin/plugin.json"
     try:
-        plugin_manifest = json.loads(plugin_manifest_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        plugin_manifest = _json_duplicate_rejecting_load(
+            plugin_manifest_path.read_text(encoding="utf-8"),
+            context=f"activated provider source manifest {plugin_manifest_path}",
+        )
+    except (OSError, UnicodeDecodeError, SkillBehaviorEvalError) as exc:
         raise SkillBehaviorEvalError(f"activated provider source manifest is invalid: {plugin_name}") from exc
     if not isinstance(plugin_manifest, dict) or plugin_manifest.get("name") != plugin_name:
         raise SkillBehaviorEvalError(f"activated provider source identity is mismatched: {plugin_name}")
@@ -1772,7 +1951,7 @@ def _skill_frontmatter_get(skill_text: str, *, context: str, skill_path: Path) -
             for event in event_list
         ):
             raise SkillBehaviorEvalError(f"{context} SKILL.md frontmatter is invalid: {skill_path}")
-        document_node_list = list(yaml.compose_all(frontmatter_text, Loader=yaml.SafeLoader))
+        document_node_list = list(yaml.compose_all(frontmatter_text, Loader=yaml.BaseLoader))
     except yaml.YAMLError as error:
         raise SkillBehaviorEvalError(f"{context} SKILL.md frontmatter is invalid: {skill_path}") from error
     if len(document_node_list) != 1 or not isinstance(document_node_list[0], MappingNode):
@@ -1786,7 +1965,8 @@ def _skill_frontmatter_get(skill_text: str, *, context: str, skill_path: Path) -
             or key_node.value in frontmatter
             or not isinstance(value_node, ScalarNode)
             or value_node.tag != "tag:yaml.org,2002:str"
-            or not value_node.value
+            or not _is_yaml_12_plain_scalar_string(value_node)
+            or not value_node.value.strip()
         ):
             raise SkillBehaviorEvalError(f"{context} SKILL.md frontmatter is invalid: {skill_path}")
         frontmatter[key_node.value] = value_node.value
@@ -2083,14 +2263,47 @@ def _case_list_evaluate(
     attempt_by_index_map: dict[int, SkillBehaviorCaseAttempt] = {}
     with ThreadPoolExecutor(max_workers=min(concurrency, len(case_list))) as executor:
         future_by_index_map = {}
+        submission_stopped = False
         for index, case in enumerate(case_list):
+            if submission_stopped:
+                failure = SkillBehaviorCaseFailure(
+                    codex_usage_generation=None,
+                    codex_usage_judge=None,
+                    error_code="case-not-submitted",
+                    error_message=_CASE_FAILURE_MESSAGE_BY_CODE_MAP["case-not-submitted"],
+                    id=case.id,
+                    suite=case.suite,
+                )
+                print(
+                    f"ERROR {failure.suite}:{failure.id}: {failure.error_code}: {failure.error_message}",
+                    flush=True,
+                )
+                attempt_by_index_map[index] = SkillBehaviorCaseAttempt(failure=failure, result=None)
+                continue
             print(f"RUN {case.suite}:{case.id}", flush=True)
-            future = executor.submit(
-                _case_evaluate,
-                case,
-                invocation_config=invocation_config,
-                plugin_source_path_by_name_map=plugin_source_path_by_name_map,
-            )
+            try:
+                future = executor.submit(
+                    _case_evaluate,
+                    case,
+                    invocation_config=invocation_config,
+                    plugin_source_path_by_name_map=plugin_source_path_by_name_map,
+                )
+            except Exception:
+                failure = SkillBehaviorCaseFailure(
+                    codex_usage_generation=None,
+                    codex_usage_judge=None,
+                    error_code="case-submission-failed",
+                    error_message=_CASE_FAILURE_MESSAGE_BY_CODE_MAP["case-submission-failed"],
+                    id=case.id,
+                    suite=case.suite,
+                )
+                print(
+                    f"ERROR {failure.suite}:{failure.id}: {failure.error_code}: {failure.error_message}",
+                    flush=True,
+                )
+                attempt_by_index_map[index] = SkillBehaviorCaseAttempt(failure=failure, result=None)
+                submission_stopped = True
+                continue
             future_by_index_map[future] = index
         for future in as_completed(future_by_index_map):
             index = future_by_index_map[future]
@@ -2099,18 +2312,24 @@ def _case_list_evaluate(
                 result = future.result()
             except SkillBehaviorCaseEvaluationError as error:
                 failure = error.failure
-                print(f"ERROR {failure.suite}:{failure.id}: {failure.error}", flush=True)
+                print(
+                    f"ERROR {failure.suite}:{failure.id}: {failure.error_code}: {failure.error_message}",
+                    flush=True,
+                )
                 attempt_by_index_map[index] = SkillBehaviorCaseAttempt(failure=failure, result=None)
-            except Exception as error:
-                error_text = str(error) or type(error).__name__
+            except Exception:
                 failure = SkillBehaviorCaseFailure(
                     codex_usage_generation=None,
                     codex_usage_judge=None,
-                    error=error_text,
+                    error_code="case-internal-failure",
+                    error_message=_CASE_FAILURE_MESSAGE_BY_CODE_MAP["case-internal-failure"],
                     id=case.id,
                     suite=case.suite,
                 )
-                print(f"ERROR {failure.suite}:{failure.id}: {failure.error}", flush=True)
+                print(
+                    f"ERROR {failure.suite}:{failure.id}: {failure.error_code}: {failure.error_message}",
+                    flush=True,
+                )
                 attempt_by_index_map[index] = SkillBehaviorCaseAttempt(failure=failure, result=None)
             else:
                 attempt_by_index_map[index] = SkillBehaviorCaseAttempt(failure=None, result=result)

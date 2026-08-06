@@ -629,7 +629,8 @@ def test_runner_publishes_non_acceptance_attempt_after_case_failure(
     failure = module.SkillBehaviorCaseFailure(
         codex_usage_generation=module.CodexUsage(**_codex_usage_payload()),
         codex_usage_judge=None,
-        error="source validation failed",
+        error_code="generation-validation-failed",
+        error_message="Generation result validation failed.",
         id="case-a",
         suite="provider",
     )
@@ -720,6 +721,8 @@ def _plugin_source_path_by_name_map_create(
         "---\ndescription: Missing name.\n---\n",
         "---\nname: test-skill\n---\n",
         "---\nname: test-skill\ndescription: null\n---\n",
+        "---\nname: '   '\ndescription: Whitespace-only name.\n---\n",
+        "---\nname: test-skill\ndescription: '   '\n---\n",
         (
             "---\nname: test-skill\ndescription: First document.\n...\n"
             "--- # second document\nname: test-skill\ndescription: Second document.\n---\n"
@@ -736,6 +739,8 @@ def _plugin_source_path_by_name_map_create(
         "missing-name",
         "missing-description",
         "non-string-description",
+        "whitespace-only-name",
+        "whitespace-only-description",
         "multiple-documents",
     ],
 )
@@ -764,10 +769,15 @@ def test_skill_path_resolve_rejects_noncanonical_frontmatter(
         )
 
 
-def test_skill_path_resolve_accepts_exact_frontmatter_delimiter_lines(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "description",
+    ["Exact schema.", "yes", "no", "on", "off", "2026-08-07", "2001-12-15T02:59:43.1Z"],
+)
+def test_skill_path_resolve_accepts_exact_frontmatter_delimiter_lines(description: str, tmp_path: Path) -> None:
     """An exact closed frontmatter document may be followed by Markdown delimiter lines.
 
     Args:
+        description: YAML 1.2 string scalar, including YAML 1.1 boolean and timestamp forms.
         tmp_path: Temporary directory path.
     """
 
@@ -775,7 +785,7 @@ def test_skill_path_resolve_accepts_exact_frontmatter_delimiter_lines(tmp_path: 
     skill_path = tmp_path / "skills/test-skill/SKILL.md"
     skill_path.parent.mkdir(parents=True)
     skill_path.write_text(
-        "---\nname: test-skill\ndescription: Exact schema.\n---\n# Body\n\n---\n",
+        f"---\nname: test-skill\ndescription: {description}\n---\n# Body\n\n---\n",
         encoding="utf-8",
     )
 
@@ -1537,7 +1547,7 @@ def test_case_evaluate_rejects_bare_ambient_activation(tmp_path: Path) -> None:
             usage=module.CodexUsage(**_codex_usage_payload()),
         )
 
-    with pytest.raises(module.SkillBehaviorEvalError, match="ambient-skill"):
+    with pytest.raises(module.SkillBehaviorCaseEvaluationError) as error_info:
         module._case_evaluate(
             case,
             invocation_config=module.ModelInvocationConfig(
@@ -1552,6 +1562,8 @@ def test_case_evaluate_rejects_bare_ambient_activation(tmp_path: Path) -> None:
             model_call=_model_call,
         )
 
+    assert error_info.value.failure.error_code == "generation-validation-failed"
+    assert error_info.value.failure.codex_usage_generation == module.CodexUsage(**_codex_usage_payload())
     assert call_count == 1
 
 
@@ -1576,7 +1588,7 @@ def test_case_evaluate_rejects_nonexistent_qualified_skill(tmp_path: Path) -> No
             usage=module.CodexUsage(**_codex_usage_payload()),
         )
 
-    with pytest.raises(module.SkillBehaviorEvalError, match="absent from its exact bound provider"):
+    with pytest.raises(module.SkillBehaviorCaseEvaluationError) as error_info:
         module._case_evaluate(
             case,
             invocation_config=module.ModelInvocationConfig(
@@ -1591,6 +1603,8 @@ def test_case_evaluate_rejects_nonexistent_qualified_skill(tmp_path: Path) -> No
             model_call=_model_call,
         )
 
+    assert error_info.value.failure.error_code == "generation-validation-failed"
+    assert error_info.value.failure.codex_usage_generation == module.CodexUsage(**_codex_usage_payload())
     assert call_count == 1
 
 
@@ -1623,11 +1637,7 @@ def test_case_evaluate_rejects_qualified_activated_provider_omitted_from_source_
             usage=module.CodexUsage(**_codex_usage_payload()),
         )
 
-    expected_error = (
-        "activated skill has no exact bound provider source: "
-        "workflow-container-agent-tools:workflow-container-developer"
-    )
-    with pytest.raises(module.SkillBehaviorCaseEvaluationError, match=expected_error) as error_info:
+    with pytest.raises(module.SkillBehaviorCaseEvaluationError) as error_info:
         module._case_evaluate(
             case,
             invocation_config=module.ModelInvocationConfig(
@@ -1639,7 +1649,8 @@ def test_case_evaluate_rejects_qualified_activated_provider_omitted_from_source_
             model_call=_model_call,
         )
 
-    assert str(error_info.value) == expected_error
+    assert error_info.value.failure.error_code == "generation-validation-failed"
+    assert str(error_info.value) == "Generation result validation failed."
     assert error_info.value.failure.codex_usage_generation == module.CodexUsage(**_codex_usage_payload())
     assert error_info.value.failure.codex_usage_judge is None
     assert call_count == 1
@@ -1767,7 +1778,7 @@ def test_case_evaluate_rejects_provider_and_project_local_collision(tmp_path: Pa
             usage=module.CodexUsage(**_codex_usage_payload()),
         )
 
-    with pytest.raises(module.SkillBehaviorEvalError, match="ambiguous source identity"):
+    with pytest.raises(module.SkillBehaviorCaseEvaluationError) as error_info:
         module._case_evaluate(
             case,
             invocation_config=module.ModelInvocationConfig(
@@ -1782,6 +1793,8 @@ def test_case_evaluate_rejects_provider_and_project_local_collision(tmp_path: Pa
             model_call=_model_call,
         )
 
+    assert error_info.value.failure.error_code == "generation-validation-failed"
+    assert error_info.value.failure.codex_usage_generation == module.CodexUsage(**_codex_usage_payload())
     assert call_count == 1
 
 
@@ -1994,7 +2007,8 @@ def test_case_list_evaluate_drains_all_futures_into_non_acceptance_record(
                 module.SkillBehaviorCaseFailure(
                     codex_usage_generation=module.CodexUsage(**_codex_usage_payload()),
                     codex_usage_judge=None,
-                    error="activation source failed",
+                    error_code="generation-validation-failed",
+                    error_message="Generation result validation failed.",
                     id=case.id,
                     suite=case.suite,
                 )
@@ -2038,7 +2052,8 @@ def test_case_list_evaluate_drains_all_futures_into_non_acceptance_record(
         {
             "codex_usage_generation": _codex_usage_payload(),
             "codex_usage_judge": None,
-            "error": "activation source failed",
+            "error_code": "generation-validation-failed",
+            "error_message": "Generation result validation failed.",
             "id": "case-a",
             "outcome": "failed",
             "suite": first_case.suite,
@@ -2046,7 +2061,8 @@ def test_case_list_evaluate_drains_all_futures_into_non_acceptance_record(
         {
             "codex_usage_generation": _codex_usage_payload(2),
             "codex_usage_judge": _codex_usage_payload(3),
-            "error": "",
+            "error_code": None,
+            "error_message": None,
             "id": "case-b",
             "outcome": "completed",
             "suite": first_case.suite,
@@ -2056,6 +2072,123 @@ def test_case_list_evaluate_drains_all_futures_into_non_acceptance_record(
     acceptance_module = _acceptance_module_load()
     with pytest.raises(acceptance_module.SkillBehaviorAcceptanceError):
         acceptance_module.acceptance_state_get([payload])
+
+
+def test_case_list_evaluate_drains_submitted_future_after_submission_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A partial submission failure preserves submitted usage and closes every remaining case.
+
+    Args:
+        monkeypatch: Pytest mutation fixture.
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    corpus_path = tmp_path / "skill_behavior_eval/corpus-v1.json"
+    corpus_path.parent.mkdir()
+    _corpus_write(corpus_path)
+    first_case = module._corpus_case_list_load(corpus_path)[0]
+    case_list = [
+        module.SkillBehaviorCase(
+            corpus_path=first_case.corpus_path,
+            expected_skill_list=first_case.expected_skill_list,
+            forbidden_skill_list=first_case.forbidden_skill_list,
+            id=f"case-{case_number}",
+            prompt=first_case.prompt,
+            semantic_invariant_list=first_case.semantic_invariant_list,
+            suite=first_case.suite,
+            working_directory=first_case.working_directory,
+        )
+        for case_number in range(3)
+    ]
+    real_executor = module.ThreadPoolExecutor
+
+    class PartialSubmissionExecutor:
+        """Submit one future and reject the next submission."""
+
+        def __init__(self, max_workers: int) -> None:
+            """Create the delegated real executor.
+
+            Args:
+                max_workers: Maximum worker count.
+            """
+
+            self.executor = real_executor(max_workers=max_workers)
+            self.submission_count = 0
+
+        def __enter__(self) -> Any:
+            """Enter the delegated executor context."""
+
+            self.executor.__enter__()
+            return self
+
+        def __exit__(self, *argument_list: Any) -> None:
+            """Exit the delegated executor context.
+
+            Args:
+                argument_list: Context-manager exit arguments.
+            """
+
+            self.executor.__exit__(*argument_list)
+
+        def submit(self, function: Any, *argument_list: Any, **keyword_by_name_map: Any) -> Any:
+            """Submit the first case and reject the second.
+
+            Args:
+                function: Submitted callable.
+                argument_list: Positional call arguments.
+                keyword_by_name_map: Keyword call arguments.
+
+            Returns:
+                First submitted future.
+            """
+
+            self.submission_count += 1
+            if self.submission_count == 2:
+                raise RuntimeError("submission-secret-sentinel")
+            return self.executor.submit(function, *argument_list, **keyword_by_name_map)
+
+    def _case_evaluate(*_args: Any, **_kwargs: Any) -> Any:
+        """Return one completed submitted case with exact usage."""
+
+        return module.SkillBehaviorCaseResult(
+            activated_skill_list=(),
+            codex_usage_generation=module.CodexUsage(**_codex_usage_payload()),
+            codex_usage_judge=module.CodexUsage(**_codex_usage_payload(2)),
+            forbidden_activated_skill_list=(),
+            id="case-0",
+            missing_expected_skill_list=(),
+            passed=True,
+            response="response",
+            semantic_invariant_result_list=(),
+            suite=first_case.suite,
+        )
+
+    monkeypatch.setattr(module, "ThreadPoolExecutor", PartialSubmissionExecutor)
+    monkeypatch.setattr(module, "_case_evaluate", _case_evaluate)
+    invocation_config = module.ModelInvocationConfig(
+        codex_bin="codex",
+        model="gpt-5.6-sol",
+        reasoning_effort="medium",
+    )
+    evaluation_attempt = module._case_list_evaluate(
+        case_list,
+        concurrency=3,
+        invocation_config=invocation_config,
+        plugin_source_path_by_name_map={},
+    )
+
+    payload = evaluation_attempt.non_acceptance_payload_get(invocation_config)
+    assert [item["outcome"] for item in payload["case_usage_list"]] == ["completed", "failed", "failed"]
+    assert [item["error_code"] for item in payload["case_usage_list"]] == [
+        None,
+        "case-submission-failed",
+        "case-not-submitted",
+    ]
+    assert payload["codex_usage"] == _codex_usage_payload(3)
+    assert "submission-secret-sentinel" not in json.dumps(payload)
 
 
 def _plugin_binding_fixture_create(
@@ -2108,6 +2241,78 @@ def _plugin_binding_fixture_create(
         cache_skill_path.parent.mkdir(parents=True)
         cache_skill_path.write_bytes(source_skill_path.read_bytes())
     return marketplace_path, standard_codex_home
+
+
+def test_activated_provider_manifest_rejects_duplicate_identity_key(tmp_path: Path) -> None:
+    """The shared manifest loader rejects a repeated plugin identity key.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    plugin_source_path = _plugin_source_path_create(tmp_path / "provider", "project-standards", [])
+    (plugin_source_path / ".codex-plugin/plugin.json").write_text(
+        '{"name":"project-standards","name":"other-provider","version":"0.1.0"}\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(module.SkillBehaviorEvalError, match="manifest is invalid"):
+        module._plugin_source_path_validate("project-standards", plugin_source_path)
+
+    marketplace_path, standard_codex_home = _plugin_binding_fixture_create(tmp_path / "preinstalled")
+    preinstalled_manifest_path = marketplace_path / "plugins/project-standards/.codex-plugin/plugin.json"
+    preinstalled_manifest_path.write_text(
+        '{"name":"project-standards","name":"other-provider","version":"0.1.0+codex.test"}\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(module.SkillBehaviorEvalError, match="plugin manifest is unavailable or invalid"):
+        module._preinstalled_plugin_source_binding_validate(
+            case_list=[],
+            marketplace_path_list=[marketplace_path],
+            plugin_selector_list=["project-standards@provider-marketplace"],
+            standard_codex_home=standard_codex_home,
+        )
+
+
+@pytest.mark.parametrize(
+    "manifest_text",
+    [
+        (
+            '{"name":"provider-marketplace","name":"other-marketplace",'
+            '"plugins":[{"name":"project-standards","source":{"source":"local",'
+            '"path":"./plugins/project-standards"}}]}\n'
+        ),
+        (
+            '{"name":"provider-marketplace","plugins":[{"name":"project-standards",'
+            '"source":{"source":"local","source":"git",'
+            '"path":"./plugins/project-standards"}}]}\n'
+        ),
+    ],
+    ids=["duplicate-marketplace-identity", "duplicate-plugin-source-key"],
+)
+def test_preinstalled_plugin_binding_rejects_duplicate_manifest_keys(
+    manifest_text: str,
+    tmp_path: Path,
+) -> None:
+    """Marketplace identity and plugin source objects reject duplicate keys.
+
+    Args:
+        manifest_text: Marketplace manifest with one repeated identity-bearing key.
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    marketplace_path, standard_codex_home = _plugin_binding_fixture_create(tmp_path)
+    (marketplace_path / ".agents/plugins/marketplace.json").write_text(manifest_text, encoding="utf-8")
+
+    with pytest.raises(module.SkillBehaviorEvalError, match="manifest is unavailable or invalid"):
+        module._preinstalled_plugin_source_binding_validate(
+            case_list=[],
+            marketplace_path_list=[marketplace_path],
+            plugin_selector_list=["project-standards@provider-marketplace"],
+            standard_codex_home=standard_codex_home,
+        )
 
 
 def test_standard_codex_environment_preserves_real_home_and_unset_override(
@@ -2199,6 +2404,212 @@ def test_codex_invocation_uses_standard_home_persistent_session_and_native_wait(
     assert run_keyword_by_name_map["env"] == environment
     assert "CODEX_HOME" not in run_keyword_by_name_map["env"]
     assert "timeout" not in run_keyword_by_name_map
+
+
+@pytest.mark.parametrize(
+    ("return_code", "output_text", "error_code"),
+    [
+        (17, '{"response":"unused"}\n', "codex-process-failed"),
+        (0, "not-json\n", "codex-output-invalid"),
+    ],
+)
+def test_codex_invocation_failure_extracts_usage_before_completion_validation(
+    error_code: str,
+    monkeypatch: pytest.MonkeyPatch,
+    output_text: str,
+    return_code: int,
+    tmp_path: Path,
+) -> None:
+    """Nonzero completion and malformed output retain exact usage extracted first.
+
+    Args:
+        error_code: Expected closed invocation failure code.
+        monkeypatch: Pytest mutation fixture.
+        output_text: Structured-output file contents.
+        return_code: Simulated Codex process return code.
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+
+    def _run(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        """Return one completed process with exact usage and selected output.
+
+        Args:
+            command: Direct process arguments.
+            _kwargs: Process keyword arguments.
+
+        Returns:
+            Simulated completed Codex process.
+        """
+
+        output_path = Path(command[command.index("--output-last-message") + 1])
+        output_path.write_text(output_text, encoding="utf-8")
+        event_list = [
+            {"type": "thread.started", "thread_id": "thread-id"},
+            {"type": "turn.completed", "usage": _codex_usage_payload()},
+        ]
+        return subprocess.CompletedProcess(
+            command,
+            return_code,
+            stdout="\n".join(json.dumps(event) for event in event_list) + "\n",
+            stderr="raw-stderr-secret",
+        )
+
+    monkeypatch.setattr(module, "_standard_codex_process_environment_get", lambda: {"HOME": "/home/test-user"})
+    monkeypatch.setattr(module.subprocess, "run", _run)
+
+    with pytest.raises(module.ModelInvocationError) as error_info:
+        module._codex_payload_get(
+            "prompt",
+            tmp_path,
+            {"type": "object"},
+            module.ModelInvocationConfig(codex_bin="codex", model="gpt-5.6-sol", reasoning_effort="max"),
+        )
+
+    assert error_info.value.failure.error_code == error_code
+    assert error_info.value.failure.usage == module.CodexUsage(**_codex_usage_payload())
+    assert "raw-stderr-secret" not in str(error_info.value)
+
+
+@pytest.mark.parametrize(
+    ("failure_stage", "error_code"),
+    [("generation", "codex-process-failed"), ("judge", "codex-output-invalid")],
+)
+def test_case_evaluate_carries_typed_invocation_usage_for_each_model_stage(
+    error_code: str,
+    failure_stage: str,
+    tmp_path: Path,
+) -> None:
+    """Generation and judge invocation failures retain their available exact usage.
+
+    Args:
+        error_code: Expected closed invocation failure code.
+        failure_stage: Model stage that fails.
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    corpus_path = tmp_path / "skill_behavior_eval/corpus-v1.json"
+    corpus_path.parent.mkdir()
+    _corpus_write(corpus_path, expected_skill_list=[], forbidden_skill_list=[])
+    case = module._corpus_case_list_load(corpus_path)[0]
+    call_count = 0
+
+    def _model_call(*_args: Any) -> Any:
+        """Return generation or raise one typed stage failure.
+
+        Returns:
+            Valid generation invocation when the judge stage is selected.
+        """
+
+        nonlocal call_count
+        call_count += 1
+        if failure_stage == "judge" and call_count == 1:
+            return module.ModelInvocationResult(
+                payload={"activated_skill_list": [], "response": "Read-only response."},
+                usage=module.CodexUsage(**_codex_usage_payload()),
+            )
+        raise module.ModelInvocationError(
+            module.ModelInvocationFailure(
+                error_code=error_code,
+                error_message={
+                    "codex-output-invalid": "Codex structured output is invalid.",
+                    "codex-process-failed": "Codex invocation completed unsuccessfully.",
+                }[error_code],
+                usage=module.CodexUsage(**_codex_usage_payload(2)),
+            )
+        )
+
+    with pytest.raises(module.SkillBehaviorCaseEvaluationError) as error_info:
+        module._case_evaluate(
+            case,
+            invocation_config=module.ModelInvocationConfig(
+                codex_bin="codex",
+                model="gpt-5.6-sol",
+                reasoning_effort="medium",
+            ),
+            plugin_source_path_by_name_map={},
+            model_call=_model_call,
+        )
+
+    failure = error_info.value.failure
+    assert failure.error_code == error_code
+    if failure_stage == "generation":
+        assert failure.codex_usage_generation == module.CodexUsage(**_codex_usage_payload(2))
+        assert failure.codex_usage_judge is None
+    else:
+        assert failure.codex_usage_generation == module.CodexUsage(**_codex_usage_payload())
+        assert failure.codex_usage_judge == module.CodexUsage(**_codex_usage_payload(2))
+
+
+def test_non_acceptance_surfaces_redact_raw_codex_streams(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Console and non-acceptance JSON never expose raw Codex stream sentinels.
+
+    Args:
+        capsys: Pytest output capture fixture.
+        monkeypatch: Pytest mutation fixture.
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    corpus_path = tmp_path / "skill_behavior_eval/corpus-v1.json"
+    corpus_path.parent.mkdir()
+    _corpus_write(corpus_path, expected_skill_list=[], forbidden_skill_list=[])
+    case = module._corpus_case_list_load(corpus_path)[0]
+    stdout_secret = "stdout-secret-sentinel"
+    stderr_secret = "stderr-secret-sentinel"
+
+    def _run(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        """Return one nonzero process containing both stream sentinels.
+
+        Args:
+            command: Direct process arguments.
+            _kwargs: Process keyword arguments.
+
+        Returns:
+            Simulated failed Codex process with exact usage.
+        """
+
+        event_list = [
+            {"type": "item.completed", "text": stdout_secret},
+            {"type": "turn.completed", "usage": _codex_usage_payload()},
+        ]
+        return subprocess.CompletedProcess(
+            command,
+            9,
+            stdout="\n".join(json.dumps(event) for event in event_list) + "\n",
+            stderr=stderr_secret,
+        )
+
+    monkeypatch.setattr(module, "_standard_codex_process_environment_get", lambda: {"HOME": "/home/test-user"})
+    monkeypatch.setattr(module.subprocess, "run", _run)
+    invocation_config = module.ModelInvocationConfig(
+        codex_bin="codex",
+        model="gpt-5.6-sol",
+        reasoning_effort="max",
+    )
+    evaluation_attempt = module._case_list_evaluate(
+        [case],
+        concurrency=1,
+        invocation_config=invocation_config,
+        plugin_source_path_by_name_map={},
+    )
+    payload = evaluation_attempt.non_acceptance_payload_get(invocation_config)
+    output_path = tmp_path / "non-acceptance.json"
+    module._result_output_publish(output_path, payload)
+    console_output = capsys.readouterr().out
+    serialized_payload = output_path.read_text(encoding="utf-8")
+
+    assert payload["case_usage_list"][0]["codex_usage_generation"] == _codex_usage_payload()
+    assert payload["case_usage_list"][0]["error_code"] == "codex-process-failed"
+    for sentinel in (stdout_secret, stderr_secret):
+        assert sentinel not in console_output
+        assert sentinel not in serialized_payload
 
 
 @pytest.mark.parametrize(

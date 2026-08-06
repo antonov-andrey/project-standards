@@ -22,7 +22,7 @@ Project-owned YAML использует строгую YAML 1.2 boundary без 
 
 Owner-local `project-instruction-developer/scripts/skill_behavior_eval.py` запускает для каждого case два независимых прохода target model. Первый проход работает в read-only Codex session, применяет реальные project instructions и skills и возвращает user-facing response и фактически активированные skills. Второй проход получает scenario и готовый response и оценивает каждый invariant по смыслу. Substring, keyword, heading и formatting checks не являются semantic verdict.
 
-Каждый non-list model run использует обязательную exact source binding для union expected и forbidden providers выбранных cases. Полный binding и installed-cache contract принадлежит `project-instruction-developer`, reference `Skill Model`; стандартный home, structured usage, native wait и resume boundaries принадлежат `project-foundation`, reference `Codex Process State`.
+Каждый non-list model run использует обязательную exact source binding для объединения expected, forbidden и всех фактически активированных providers выбранных cases. Полный binding и installed-cache contract принадлежит `project-instruction-developer`, reference `Skill Model`; стандартный home, structured usage, native wait и resume boundaries принадлежат `project-foundation`, reference `Codex Process State`.
 
 Runner по умолчанию использует `gpt-5.6-sol` и не входит в `pytest`, `project-standard-check` или обычный deterministic validation. Он является отдельной opt-in acceptance фазой для изменений descriptions, invocation policy, skill boundaries, orchestration и существенных skill instructions. Versioned corpora принадлежат provider или project, чьи skills они проверяют; реализация runner не копируется.
 
