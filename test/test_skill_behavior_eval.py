@@ -88,9 +88,18 @@ def _acceptance_result_payload(
         "run_timestamp": "2026-08-06T12:00:00+00:00",
         "case_result_list": [
             {
+                "activated_skill_list": [],
+                "forbidden_activated_skill_list": [],
                 "suite": case_id.split(":", maxsplit=1)[0],
                 "id": case_id.split(":", maxsplit=1)[1],
+                "missing_expected_skill_list": (
+                    ["provider:required-skill"] if case_id in failed_case_id_set else []
+                ),
                 "passed": case_id not in failed_case_id_set,
+                "response": "deterministic fixture response",
+                "semantic_invariant_result_list": [
+                    {"id": "complete", "passed": True, "reason": "fixture invariant passed"}
+                ],
             }
             for case_id in case_id_list
         ],
@@ -98,7 +107,10 @@ def _acceptance_result_payload(
         "total_case_count": len(case_id_list),
     }
     if schema_version == 2:
-        payload["codex_usage"] = _codex_usage_payload()
+        for case_result in payload["case_result_list"]:
+            case_result["codex_usage_generation"] = _codex_usage_payload()
+            case_result["codex_usage_judge"] = _codex_usage_payload()
+        payload["codex_usage"] = _codex_usage_payload(2 * len(case_id_list))
         payload["failed_case_id_list"] = failed_case_id_list
     return payload
 
@@ -237,6 +249,135 @@ def test_acceptance_cycle_rejects_failed_list_that_differs_from_case_outcomes() 
         module.acceptance_state_get([result])
 
 
+@pytest.mark.parametrize("schema_version", [1, 2])
+def test_acceptance_cycle_recomputes_every_case_verdict(schema_version: int) -> None:
+    """Neither supported schema may assert a pass contrary to activation or invariants."""
+
+    module = _acceptance_module_load()
+    result = _acceptance_result_payload(
+        ["provider:case-a"],
+        failed_case_id_list=[],
+        schema_version=schema_version,
+    )
+    result["case_result_list"][0]["semantic_invariant_result_list"][0]["passed"] = False
+
+    with pytest.raises(module.SkillBehaviorAcceptanceError, match="recomputed verdict"):
+        module.acceptance_state_get([result])
+
+
+@pytest.mark.parametrize("failure_field", ["missing_expected_skill_list", "forbidden_activated_skill_list"])
+def test_acceptance_cycle_recomputes_activation_failures(failure_field: str) -> None:
+    """A declared activation failure makes the case fail regardless of its stored verdict."""
+
+    module = _acceptance_module_load()
+    result = _acceptance_result_payload(["provider:case-a"], failed_case_id_list=[])
+    result["case_result_list"][0][failure_field] = ["provider:unexpected"]
+    if failure_field == "forbidden_activated_skill_list":
+        result["case_result_list"][0]["activated_skill_list"] = ["provider:unexpected"]
+
+    with pytest.raises(module.SkillBehaviorAcceptanceError, match="recomputed verdict"):
+        module.acceptance_state_get([result])
+
+
+def test_acceptance_cycle_rejects_forbidden_skill_not_reported_as_activated() -> None:
+    """A forbidden activation failure must be derived from the activated set."""
+
+    module = _acceptance_module_load()
+    result = _acceptance_result_payload(
+        ["provider:case-a"],
+        failed_case_id_list=["provider:case-a"],
+    )
+    result["case_result_list"][0]["missing_expected_skill_list"] = []
+    result["case_result_list"][0]["forbidden_activated_skill_list"] = ["provider:unexpected"]
+
+    with pytest.raises(module.SkillBehaviorAcceptanceError, match="not a subset"):
+        module.acceptance_state_get([result])
+
+
+@pytest.mark.parametrize("run_timestamp", ["not-a-timestamp", "2026-08-06T16:00:00+04:00"])
+def test_acceptance_cycle_requires_a_parseable_utc_timestamp(run_timestamp: str) -> None:
+    """Accepted result provenance uses one parseable UTC instant."""
+
+    module = _acceptance_module_load()
+    result = _acceptance_result_payload(["provider:case-a"], failed_case_id_list=[])
+    result["run_timestamp"] = run_timestamp
+
+    with pytest.raises(module.SkillBehaviorAcceptanceError, match="run_timestamp"):
+        module.acceptance_state_get([result])
+
+
+def test_acceptance_cycle_recomputes_schema_v2_aggregate_usage() -> None:
+    """The aggregate must equal every generation and judge counter exactly."""
+
+    module = _acceptance_module_load()
+    result = _acceptance_result_payload(["provider:case-a"], failed_case_id_list=[])
+    result["codex_usage"]["output_tokens"] += 1
+
+    with pytest.raises(module.SkillBehaviorAcceptanceError, match="recomputed case usage"):
+        module.acceptance_state_get([result])
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value", "message"),
+    [
+        ("cached_input_tokens", 6, "cached_input_tokens"),
+        ("cache_write_input_tokens", 6, "cache_write_input_tokens"),
+        ("reasoning_output_tokens", 3, "reasoning_output_tokens"),
+    ],
+)
+def test_acceptance_cycle_validates_each_schema_v2_usage_relation(
+    field_name: str,
+    value: int,
+    message: str,
+) -> None:
+    """Every generation and judge usage object satisfies its counter relations."""
+
+    module = _acceptance_module_load()
+    result = _acceptance_result_payload(["provider:case-a"], failed_case_id_list=[])
+    result["case_result_list"][0]["codex_usage_generation"][field_name] = value
+
+    with pytest.raises(module.SkillBehaviorAcceptanceError, match=message):
+        module.acceptance_state_get([result])
+
+
+def test_acceptance_cycle_rejects_cross_field_activation_inconsistency() -> None:
+    """Derived activation failures must agree with the activated skill set."""
+
+    module = _acceptance_module_load()
+    result = _acceptance_result_payload(["provider:case-a"], failed_case_id_list=[])
+    result["case_result_list"][0]["missing_expected_skill_list"] = ["provider:skill"]
+    result["case_result_list"][0]["activated_skill_list"] = ["provider:skill"]
+
+    with pytest.raises(module.SkillBehaviorAcceptanceError, match="intersects activated_skill_list"):
+        module.acceptance_state_get([result])
+
+
+def test_acceptance_cycle_rejects_schema_specific_case_fields() -> None:
+    """Legacy cases cannot smuggle current-schema usage objects."""
+
+    module = _acceptance_module_load()
+    result = _acceptance_result_payload(
+        ["provider:case-a"],
+        failed_case_id_list=[],
+        schema_version=1,
+    )
+    result["case_result_list"][0]["codex_usage_generation"] = _codex_usage_payload()
+
+    with pytest.raises(module.SkillBehaviorAcceptanceError, match="schema-v1 shape"):
+        module.acceptance_state_get([result])
+
+
+def test_acceptance_loader_rejects_duplicate_json_keys(tmp_path: Path) -> None:
+    """Strict JSON parsing rejects ambiguity before schema interpretation."""
+
+    module = _acceptance_module_load()
+    result_path = tmp_path / "duplicate.json"
+    result_path.write_text('{"schema_version":1,"schema_version":2}', encoding="utf-8")
+
+    with pytest.raises(module.SkillBehaviorAcceptanceError, match="repeats JSON key"):
+        module._result_load(result_path)
+
+
 @pytest.mark.parametrize(
     ("field_name", "value", "message"),
     [
@@ -307,7 +448,9 @@ def test_runner_result_exposes_exact_failed_set_for_acceptance() -> None:
             missing_expected_skill_list=(),
             passed=True,
             response="accepted",
-            semantic_invariant_result_list=(),
+            semantic_invariant_result_list=(
+                module.SemanticInvariantResult(id="complete", passed=True, reason="accepted"),
+            ),
             suite="provider",
         ),
         module.SkillBehaviorCaseResult(
@@ -319,7 +462,9 @@ def test_runner_result_exposes_exact_failed_set_for_acceptance() -> None:
             missing_expected_skill_list=(),
             passed=False,
             response="needs classification",
-            semantic_invariant_result_list=(),
+            semantic_invariant_result_list=(
+                module.SemanticInvariantResult(id="complete", passed=False, reason="needs classification"),
+            ),
             suite="provider",
         ),
     ]
@@ -339,6 +484,87 @@ def test_runner_result_exposes_exact_failed_set_for_acceptance() -> None:
     assert payload["failed_case_count"] == 1
     assert payload["failed_case_id_list"] == ["provider:case-b"]
     assert payload["codex_usage"] == _codex_usage_payload(10)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("cached_input_tokens", 6),
+        ("cache_write_input_tokens", 6),
+        ("reasoning_output_tokens", 3),
+    ],
+)
+def test_runner_usage_rejects_invalid_counter_relations(field_name: str, value: int) -> None:
+    """The producer cannot emit usage that the acceptance parser would reject."""
+
+    module = _module_load()
+    payload = _codex_usage_payload()
+    payload[field_name] = value
+
+    with pytest.raises(module.SkillBehaviorEvalError, match=field_name):
+        module.CodexUsage(**payload)
+
+
+def test_result_output_publish_is_exclusive_and_preserves_existing_bytes(tmp_path: Path) -> None:
+    """A completed destination is immutable."""
+
+    module = _module_load()
+    output_path = tmp_path / "result.json"
+    output_path.write_text("accepted bytes\n", encoding="utf-8")
+
+    with pytest.raises(module.SkillBehaviorEvalError, match="already exists"):
+        module._result_output_publish(output_path, {"new": "result"})
+
+    assert output_path.read_text(encoding="utf-8") == "accepted bytes\n"
+
+
+def test_result_output_publish_rejects_a_destination_creation_race(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exclusive publication never replaces the winner of a destination race."""
+
+    module = _module_load()
+    output_path = tmp_path / "result.json"
+
+    def competing_link(_source: Path, destination: Path) -> None:
+        destination.write_text("race winner\n", encoding="utf-8")
+        raise FileExistsError
+
+    monkeypatch.setattr(module.os, "link", competing_link)
+
+    with pytest.raises(module.SkillBehaviorEvalError, match="already exists"):
+        module._result_output_publish(output_path, {"new": "result"})
+
+    assert output_path.read_text(encoding="utf-8") == "race winner\n"
+    assert list(tmp_path.iterdir()) == [output_path]
+
+
+def test_result_output_publish_atomically_creates_new_destination(tmp_path: Path) -> None:
+    """One new destination receives the complete canonical result bytes."""
+
+    module = _module_load()
+    output_path = tmp_path / "result.json"
+
+    module._result_output_publish(output_path, {"accepted": True})
+
+    assert output_path.read_text(encoding="utf-8") == '{\n  "accepted": true\n}\n'
+    assert list(tmp_path.iterdir()) == [output_path]
+
+
+def test_runner_rejects_existing_output_before_reading_corpus(tmp_path: Path) -> None:
+    """An occupied output fails before corpus validation or any model work."""
+
+    module = _module_load()
+    output_path = tmp_path / "result.json"
+    output_path.write_text("immutable\n", encoding="utf-8")
+
+    return_code = module.main(
+        ["--corpus", str(tmp_path / "missing.json"), "--output", str(output_path)]
+    )
+
+    assert return_code == 2
+    assert output_path.read_text(encoding="utf-8") == "immutable\n"
 
 
 def _corpus_write(

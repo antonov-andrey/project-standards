@@ -129,6 +129,12 @@ class CodexUsage:
             value = getattr(self, field_name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise SkillBehaviorEvalError(f"Codex usage {field_name} must be a non-negative integer")
+        if self.cached_input_tokens > self.input_tokens:
+            raise SkillBehaviorEvalError("Codex usage cached_input_tokens cannot exceed input_tokens")
+        if self.cache_write_input_tokens > self.input_tokens:
+            raise SkillBehaviorEvalError("Codex usage cache_write_input_tokens cannot exceed input_tokens")
+        if self.reasoning_output_tokens > self.output_tokens:
+            raise SkillBehaviorEvalError("Codex usage reasoning_output_tokens cannot exceed output_tokens")
 
     def add(self, other: CodexUsage) -> CodexUsage:
         """Add each exact counter independently.
@@ -1599,6 +1605,44 @@ def _result_print(result: SkillBehaviorCaseResult) -> None:
             )
 
 
+def _output_destination_validate(output_path: Path) -> None:
+    """Reject one already occupied or symlinked immutable result destination."""
+
+    if output_path.exists() or output_path.is_symlink():
+        raise SkillBehaviorEvalError(f"Output destination already exists: {output_path}")
+
+
+def _result_output_publish(output_path: Path, payload: dict[str, Any]) -> None:
+    """Publish one fully written result atomically at a previously absent path."""
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    _output_destination_validate(output_path)
+    serialized_result = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=output_path.parent,
+            prefix=f".{output_path.name}.",
+            delete=False,
+            mode="w",
+            encoding="utf-8",
+        ) as temporary_file:
+            temporary_path = Path(temporary_file.name)
+            temporary_file.write(serialized_result)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+        temporary_path.chmod(0o644)
+        try:
+            os.link(temporary_path, output_path)
+        except FileExistsError as error:
+            raise SkillBehaviorEvalError(f"Output destination already exists: {output_path}") from error
+        except OSError as error:
+            raise SkillBehaviorEvalError(f"Cannot publish output destination: {output_path}") from error
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
 def _case_list_evaluate(
     case_list: Sequence[SkillBehaviorCase],
     *,
@@ -1646,6 +1690,8 @@ def main(argv_list: Sequence[str] | None = None) -> int:
 
     args = _argument_parser_get().parse_args(argv_list)
     try:
+        if args.output is not None:
+            _output_destination_validate(args.output)
         case_list = _selected_case_list_get(
             case_id_list=args.case_id_list,
             corpus_path_list=args.corpus_path_list,
@@ -1676,11 +1722,7 @@ def main(argv_list: Sequence[str] | None = None) -> int:
             result_list=result_list,
         )
         if args.output is not None:
-            args.output.parent.mkdir(parents=True, exist_ok=True)
-            args.output.write_text(
-                json.dumps(result_payload, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
+            _result_output_publish(args.output, result_payload)
         print(
             f"total_case_count={result_payload['total_case_count']} "
             f"failed_case_count={result_payload['failed_case_count']}"

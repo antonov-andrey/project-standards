@@ -4,7 +4,7 @@ One acceptance cycle evaluates a selected behavior corpus on `gpt-5.6-sol` with 
 
 ## Convergence Workflow
 
-1. Run every selected case exactly once with `skill_behavior_eval.py`, write its result JSON, and do not retry a case during that pass.
+1. Run every selected case exactly once with `skill_behavior_eval.py`, write its result JSON to a previously absent destination, and do not retry a case during that pass. The runner publishes that destination exclusively and atomically; an existing path or concurrent creator is a hard error and no bytes are replaced.
 2. Read the exact `failed_case_id_list` from the result. An empty list completes the cycle.
 3. For every failed case, compare the generated response and judge decision with the canonical contract before changing anything.
 4. Classify each failure as exactly one of:
@@ -12,7 +12,7 @@ One acceptance cycle evaluates a selected behavior corpus on `gpt-5.6-sol` with 
    - the response is semantically correct, so fix the owning ambiguous scenario, incorrect invariant, activation set, or evaluator instruction.
 5. Resolve all failures in the current set in one iteration.
 6. Run the next pass with one repeatable `--case <suite-qualified-id>` argument for each ID from the preceding `failed_case_id_list`, using the same model and max effort.
-7. Feed the ordered initial and targeted result files to `skill_behavior_acceptance.py --result <path> ...`. Its `next_case_argument_list` contains only the remaining failures. Do not run that next command until every current failure has been classified and its root fixed.
+7. Feed the ordered initial and targeted result files to `skill_behavior_acceptance.py --result <path> ...`. The planner strictly parses both supported result schemas, recomputes every case verdict from activation failures and semantic invariant results, validates every generation/judge usage object, and recomputes current-schema aggregate usage before it derives `next_case_argument_list`. Do not run that next command until every current failure has been classified and its root fixed.
 8. Repeat classification, root fixes, and targeted evaluation until `failed_case_id_list` is empty. The first zero-failure result is terminal model-evaluation evidence for the cycle; cases that passed in earlier iterations retain their successful result.
 
 Formally, `S0` is every selected case, `Sn+1 = failed(Sn)`, and the cycle succeeds when `failed(Sn)` is empty. A passed case MUST NOT re-enter the same cycle, and a full corpus pass MUST NOT be repeated to confirm a targeted fix.
