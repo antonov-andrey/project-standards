@@ -28,7 +28,7 @@ Formally, `S0` is every selected case, `Sn+1 = failed(Sn)`, and the cycle succee
 
 ## Commands
 
-Server bootstrap first installs every exact provider revision required by the selected cases in the current operating-system user's standard Codex home. The initial runner command then supplies every selected corpus, the same exact local plugin marketplace and plugin selector, `--model gpt-5.6-sol`, `--reasoning-effort max`, and one immutable `--output` path. The runner validates that every installed plugin cache is byte-for-byte equal to its declared source and does not install or isolate plugins itself. The standard home, native wait, resume, and exact usage boundaries are owned by `project-standards:project-foundation`, reference `Codex Process State`.
+Server bootstrap first installs every exact provider revision required by the selected cases in the current operating-system user's standard Codex home. The initial runner command then supplies every selected corpus, the complete source binding required by `skill-model.md`, `--model gpt-5.6-sol`, `--reasoning-effort max`, and one immutable `--output` path. The runner does not install or isolate plugins itself. The standard home, native wait, resume, and exact usage boundaries are owned by `project-standards:project-foundation`, reference `Codex Process State`.
 
 Selection may be the complete corpus or explicit repeated `--case` arguments.
 

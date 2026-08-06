@@ -16,4 +16,4 @@ Resume eligibility is semantic. It binds the task inputs, owned source revisions
 
 ## Usage Telemetry
 
-Record token or usage telemetry only when the invoked Codex surface exposes the exact value directly. Preserve that exact value and its unit or omit the field. Estimates and values inferred from conversation text, session logs, or output size are forbidden.
+Record token or usage telemetry only when the invoked Codex surface exposes exact structured counters directly. Capture every nested invocation, preserve each surface-provided counter name and unit, and aggregate each counter independently in deterministic attempt telemetry. Omit unavailable telemetry. Estimates and values inferred from conversation text, session logs, or output size are forbidden.

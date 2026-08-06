@@ -12,6 +12,7 @@ from typing import Any
 
 TARGET_MODEL = "gpt-5.6-sol"
 TARGET_REASONING_EFFORT = "max"
+LEGACY_RESULT_SCHEMA_VERSION = 1
 RESULT_SCHEMA_VERSION = 2
 STATE_SCHEMA_VERSION = 1
 
@@ -38,6 +39,27 @@ def _required_text(payload: dict[str, Any], field_name: str, *, context: str) ->
     return value
 
 
+def _codex_usage_validate(payload: object, *, context: str) -> None:
+    """Validate the exact aggregate counter shape from the current runner.
+
+    Args:
+        payload: Candidate aggregate usage payload.
+        context: Diagnostic result location.
+    """
+
+    expected_key_set = {
+        "cached_input_tokens",
+        "cache_write_input_tokens",
+        "input_tokens",
+        "output_tokens",
+        "reasoning_output_tokens",
+    }
+    if not isinstance(payload, dict) or set(payload) != expected_key_set:
+        raise SkillBehaviorAcceptanceError(f"{context} has another shape")
+    if any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in payload.values()):
+        raise SkillBehaviorAcceptanceError(f"{context} counters must be non-negative integers")
+
+
 def _case_result_tuple_get(payload: object, *, context: str) -> tuple[tuple[str, bool], ...]:
     """Return ordered suite-qualified case outcomes from one runner result.
 
@@ -51,8 +73,27 @@ def _case_result_tuple_get(payload: object, *, context: str) -> tuple[tuple[str,
 
     if not isinstance(payload, dict):
         raise SkillBehaviorAcceptanceError(f"{context} must be one result object")
-    if payload.get("schema_version") != RESULT_SCHEMA_VERSION:
-        raise SkillBehaviorAcceptanceError(f"{context}.schema_version must equal {RESULT_SCHEMA_VERSION}")
+    schema_version = payload.get("schema_version")
+    if type(schema_version) is not int or schema_version not in {
+        LEGACY_RESULT_SCHEMA_VERSION,
+        RESULT_SCHEMA_VERSION,
+    }:
+        raise SkillBehaviorAcceptanceError(
+            f"{context}.schema_version must equal {LEGACY_RESULT_SCHEMA_VERSION} or {RESULT_SCHEMA_VERSION}"
+        )
+    expected_key_set = {
+        "case_result_list",
+        "failed_case_count",
+        "model",
+        "reasoning_effort",
+        "run_timestamp",
+        "schema_version",
+        "total_case_count",
+    }
+    if schema_version == RESULT_SCHEMA_VERSION:
+        expected_key_set |= {"codex_usage", "failed_case_id_list"}
+    if set(payload) != expected_key_set:
+        raise SkillBehaviorAcceptanceError(f"{context} has another schema-v{schema_version} shape")
     if payload.get("model") != TARGET_MODEL or payload.get("reasoning_effort") != TARGET_REASONING_EFFORT:
         raise SkillBehaviorAcceptanceError(
             f"{context} must use {TARGET_MODEL} with reasoning_effort={TARGET_REASONING_EFFORT}"
@@ -60,6 +101,7 @@ def _case_result_tuple_get(payload: object, *, context: str) -> tuple[tuple[str,
     raw_result_list = payload.get("case_result_list")
     if not isinstance(raw_result_list, list) or not raw_result_list:
         raise SkillBehaviorAcceptanceError(f"{context}.case_result_list must be a non-empty list")
+    _required_text(payload, "run_timestamp", context=context)
     case_result_list: list[tuple[str, bool]] = []
     for index, raw_result in enumerate(raw_result_list):
         result_context = f"{context}.case_result_list[{index}]"
@@ -75,8 +117,16 @@ def _case_result_tuple_get(payload: object, *, context: str) -> tuple[tuple[str,
     if len(case_id_list) != len(set(case_id_list)):
         raise SkillBehaviorAcceptanceError(f"{context} repeats one suite-qualified case ID")
     failed_case_id_list = [case_id for case_id, passed in case_result_list if not passed]
-    if payload.get("failed_case_id_list") != failed_case_id_list:
+    total_case_count = payload.get("total_case_count")
+    if type(total_case_count) is not int or total_case_count != len(case_result_list):
+        raise SkillBehaviorAcceptanceError(f"{context}.total_case_count differs from its case outcomes")
+    failed_case_count = payload.get("failed_case_count")
+    if type(failed_case_count) is not int or failed_case_count != len(failed_case_id_list):
+        raise SkillBehaviorAcceptanceError(f"{context}.failed_case_count differs from its case outcomes")
+    if schema_version == RESULT_SCHEMA_VERSION and payload.get("failed_case_id_list") != failed_case_id_list:
         raise SkillBehaviorAcceptanceError(f"{context}.failed_case_id_list differs from its case outcomes")
+    if schema_version == RESULT_SCHEMA_VERSION:
+        _codex_usage_validate(payload["codex_usage"], context=f"{context}.codex_usage")
     return tuple(case_result_list)
 
 
@@ -173,7 +223,9 @@ class SkillBehaviorAcceptanceState:
         }
 
 
-def acceptance_state_get(result_payload_list: Sequence[object]) -> SkillBehaviorAcceptanceState:
+def acceptance_state_get(
+    result_payload_list: Sequence[object],
+) -> SkillBehaviorAcceptanceState:
     """Replay one immutable result sequence into its current convergence state.
 
     Args:

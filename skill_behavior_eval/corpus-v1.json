@@ -378,11 +378,11 @@
         },
         {
           "id": "exact-plugin-source-binding",
-          "text": "The response requires the evaluator to validate byte-for-byte equality between every declared exact local provider source and its server-prepared installed plugin cache, and to reject missing, remote, escaping, or different source bindings rather than installing plugins itself."
+          "text": "The response requires source binding for every model run, derives required providers from both expected and forbidden activation sets, validates byte-for-byte equality between every declared exact local provider source and its server-prepared physical installed plugin cache under a physical standard cache root, and rejects absent, ambient-version, invalid-identity, invalid-version, traversal, symbolic, remote, escaping, or different bindings rather than installing plugins itself."
         },
         {
           "id": "native-wait-semantic-resume-exact-usage",
-          "text": "The response leaves process completion and cancellation to native harness waiting without project polling or fixed timeouts, makes resume identity depend only on task inputs, owned revisions, required capabilities, and result-semantic environment or release inputs rather than exact Codex version or unrelated global state, and records usage only when directly exposed exactly without estimates or log parsing."
+          "text": "The response leaves process completion and cancellation to native harness waiting without project polling or fixed timeouts, makes resume identity depend only on task inputs, owned revisions, required capabilities, and result-semantic environment or release inputs rather than exact Codex version or unrelated global state, and captures structured JSONL usage for every generation and judge invocation, preserving and independently aggregating exact surface counters and units into attempt telemetry without estimates or log parsing."
         }
       ]
     },

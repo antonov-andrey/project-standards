@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import pwd
+import re
 import subprocess
 import tempfile
 from collections.abc import Callable, Sequence
@@ -22,6 +23,16 @@ DEFAULT_REASONING_EFFORT = "max"
 CORPUS_SCHEMA_VERSION = 1
 RESULT_SCHEMA_VERSION = 2
 WORKING_DIRECTORY_MODE_SET = {"same-branch", "synchronized-main"}
+
+_PLUGIN_IDENTITY_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+_SEMVER_PATTERN = re.compile(
+    r"(0|[1-9]\d*)\."
+    r"(0|[1-9]\d*)\."
+    r"(0|[1-9]\d*)"
+    r"(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\."
+    r"(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?"
+    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
+)
 
 _GENERATION_OUTPUT_SCHEMA: dict[str, Any] = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -96,6 +107,80 @@ class ModelInvocationConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class CodexUsage:
+    """Preserve the exact token counters exposed by one Codex turn."""
+
+    cached_input_tokens: int
+    cache_write_input_tokens: int
+    input_tokens: int
+    output_tokens: int
+    reasoning_output_tokens: int
+
+    def __post_init__(self) -> None:
+        """Require exact non-negative token counters with valid subset relations."""
+
+        for field_name in (
+            "cached_input_tokens",
+            "cache_write_input_tokens",
+            "input_tokens",
+            "output_tokens",
+            "reasoning_output_tokens",
+        ):
+            value = getattr(self, field_name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise SkillBehaviorEvalError(f"Codex usage {field_name} must be a non-negative integer")
+
+    def add(self, other: CodexUsage) -> CodexUsage:
+        """Add each exact counter independently.
+
+        Args:
+            other: Another directly exposed Codex usage value.
+
+        Returns:
+            The deterministic counter-wise aggregate.
+        """
+
+        return CodexUsage(
+            cached_input_tokens=self.cached_input_tokens + other.cached_input_tokens,
+            cache_write_input_tokens=self.cache_write_input_tokens + other.cache_write_input_tokens,
+            input_tokens=self.input_tokens + other.input_tokens,
+            output_tokens=self.output_tokens + other.output_tokens,
+            reasoning_output_tokens=self.reasoning_output_tokens + other.reasoning_output_tokens,
+        )
+
+    @classmethod
+    def from_payload(cls, payload: object, *, context: str) -> CodexUsage:
+        """Parse one exact Codex `turn.completed.usage` object.
+
+        Args:
+            payload: Candidate usage payload.
+            context: Diagnostic event location.
+
+        Returns:
+            The validated exact usage counters.
+        """
+
+        expected_key_set = {
+            "cached_input_tokens",
+            "cache_write_input_tokens",
+            "input_tokens",
+            "output_tokens",
+            "reasoning_output_tokens",
+        }
+        if not isinstance(payload, dict) or set(payload) != expected_key_set:
+            raise SkillBehaviorEvalError(f"{context}: Codex usage has another shape")
+        return cls(**payload)
+
+
+@dataclass(frozen=True, slots=True)
+class ModelInvocationResult:
+    """Carry one structured response and its directly exposed turn usage."""
+
+    payload: dict[str, Any]
+    usage: CodexUsage
+
+
+@dataclass(frozen=True, slots=True)
 class SemanticInvariantResult:
     """Store one judge verdict."""
 
@@ -109,6 +194,8 @@ class SkillBehaviorCaseResult:
     """Store complete activation and semantic results for one case."""
 
     activated_skill_list: tuple[str, ...]
+    codex_usage_generation: CodexUsage
+    codex_usage_judge: CodexUsage
     forbidden_activated_skill_list: tuple[str, ...]
     id: str
     missing_expected_skill_list: tuple[str, ...]
@@ -118,7 +205,7 @@ class SkillBehaviorCaseResult:
     suite: str
 
 
-ModelCall = Callable[[str, Path, dict[str, Any], ModelInvocationConfig], dict[str, Any]]
+ModelCall = Callable[[str, Path, dict[str, Any], ModelInvocationConfig], ModelInvocationResult]
 
 
 def _positive_int_get(value: str) -> int:
@@ -908,13 +995,42 @@ Semantic invariants:
 """
 
 
+def _codex_usage_get(event_jsonl: str) -> CodexUsage:
+    """Return exact usage from one structured Codex JSONL invocation.
+
+    Args:
+        event_jsonl: Direct stdout from `codex exec --json`.
+
+    Returns:
+        The sole completed-turn usage value.
+    """
+
+    completed_usage_list: list[CodexUsage] = []
+    for index, event_text in enumerate(event_jsonl.splitlines()):
+        try:
+            event = json.loads(event_text)
+        except json.JSONDecodeError as exc:
+            raise SkillBehaviorEvalError(f"Codex JSONL event[{index}] is invalid JSON") from exc
+        if not isinstance(event, dict) or not isinstance(event.get("type"), str):
+            raise SkillBehaviorEvalError(f"Codex JSONL event[{index}] has another shape")
+        if event["type"] == "turn.completed":
+            if set(event) != {"type", "usage"}:
+                raise SkillBehaviorEvalError(f"Codex JSONL event[{index}] turn completion has another shape")
+            completed_usage_list.append(
+                CodexUsage.from_payload(event["usage"], context=f"Codex JSONL event[{index}].usage")
+            )
+    if len(completed_usage_list) != 1:
+        raise SkillBehaviorEvalError("Codex JSONL must contain exactly one turn.completed usage event")
+    return completed_usage_list[0]
+
+
 def _codex_payload_get(
     prompt: str,
     working_directory: Path,
     output_schema: dict[str, Any],
     invocation_config: ModelInvocationConfig,
-) -> dict[str, Any]:
-    """Invoke Codex once and return its structured final payload.
+) -> ModelInvocationResult:
+    """Invoke Codex once and return its structured payload and exact usage.
 
     Args:
         prompt: Prompt.
@@ -923,7 +1039,7 @@ def _codex_payload_get(
         invocation_config: Invocation config.
 
     Returns:
-        Structured final response returned by the Codex invocation.
+        Structured final response and direct `turn.completed.usage` counters.
     """
 
     with tempfile.TemporaryDirectory(prefix="skill-behavior-eval-") as temporary_directory_value:
@@ -934,6 +1050,7 @@ def _codex_payload_get(
         command = [
             invocation_config.codex_bin,
             "exec",
+            "--json",
             "--sandbox",
             "read-only",
             "--color",
@@ -974,7 +1091,10 @@ def _codex_payload_get(
             raise SkillBehaviorEvalError(f"Codex returned invalid structured output: {exc}") from exc
     if not isinstance(payload, dict):
         raise SkillBehaviorEvalError("Codex structured output must be an object")
-    return payload
+    return ModelInvocationResult(
+        payload=payload,
+        usage=_codex_usage_get(completed_process.stdout),
+    )
 
 
 def _standard_codex_process_environment_get(
@@ -1038,10 +1158,22 @@ def _preinstalled_plugin_source_binding_validate(
             "--plugin-marketplace and --plugin must be supplied together so the evaluated source is explicit"
         )
     if not marketplace_path_list:
-        return
+        raise SkillBehaviorEvalError("every model run requires explicit --plugin-marketplace and --plugin binding")
 
     normalized_plugin_selector_list = _plugin_selector_tuple_normalize(plugin_selector_list)
-    _expected_plugin_source_binding_validate(case_list, normalized_plugin_selector_list)
+    _required_plugin_source_binding_validate(case_list, normalized_plugin_selector_list)
+
+    raw_cache_root = standard_codex_home / "plugins/cache"
+    try:
+        resolved_cache_root = raw_cache_root.resolve(strict=True)
+    except OSError as exc:
+        raise SkillBehaviorEvalError("the standard Codex plugin cache root is unavailable") from exc
+    if (
+        Path(os.path.abspath(raw_cache_root)) != resolved_cache_root
+        or raw_cache_root.is_symlink()
+        or not resolved_cache_root.is_dir()
+    ):
+        raise SkillBehaviorEvalError("the standard Codex plugin cache root must be one physical directory")
 
     resolved_marketplace_path_list: list[Path] = []
     plugin_source_path_by_name_by_marketplace_name_map: dict[str, dict[str, Path]] = {}
@@ -1078,12 +1210,14 @@ def _preinstalled_plugin_source_binding_validate(
             raise SkillBehaviorEvalError(
                 f"plugin marketplace manifest has no usable name/plugin inventory: {marketplace_manifest_path}"
             )
-        normalized_marketplace_name = marketplace_name.strip()
+        normalized_marketplace_name = marketplace_name
+        _plugin_identity_validate(normalized_marketplace_name, label="plugin marketplace name")
         if normalized_marketplace_name in plugin_source_path_by_name_by_marketplace_name_map:
             raise SkillBehaviorEvalError(f"duplicate plugin marketplace name: {normalized_marketplace_name}")
         plugin_source_path_by_name_map: dict[str, Path] = {}
         for plugin in plugin_list:
-            plugin_name = plugin["name"].strip()
+            plugin_name = plugin["name"]
+            _plugin_identity_validate(plugin_name, label="plugin name")
             if plugin_name in plugin_source_path_by_name_map:
                 raise SkillBehaviorEvalError(
                     f"duplicate plugin name in marketplace {normalized_marketplace_name}: " f"{plugin_name}"
@@ -1130,11 +1264,23 @@ def _preinstalled_plugin_source_binding_validate(
         if not isinstance(plugin_manifest, dict) or plugin_manifest.get("name") != plugin_name:
             raise SkillBehaviorEvalError(f"plugin manifest identity differs from its selector: {plugin_selector}")
         plugin_version = plugin_manifest.get("version")
-        if not isinstance(plugin_version, str) or not plugin_version.strip():
-            raise SkillBehaviorEvalError(f"plugin manifest version is absent: {plugin_selector}")
-        cached_plugin_path = standard_codex_home / "plugins/cache" / marketplace_name / plugin_name / plugin_version
-        if not cached_plugin_path.is_dir():
+        if not isinstance(plugin_version, str) or _SEMVER_PATTERN.fullmatch(plugin_version) is None:
+            raise SkillBehaviorEvalError(f"plugin manifest version must be strict SemVer: {plugin_selector}")
+        raw_cached_plugin_path = resolved_cache_root / marketplace_name / plugin_name / plugin_version
+        try:
+            cached_plugin_path = raw_cached_plugin_path.resolve(strict=True)
+            cached_plugin_path.relative_to(resolved_cache_root)
+        except (OSError, ValueError) as exc:
             raise SkillBehaviorEvalError(f"server bootstrap did not prepare the selected plugin: {plugin_selector}")
+        if (
+            Path(os.path.abspath(raw_cached_plugin_path)) != cached_plugin_path
+            or raw_cached_plugin_path.is_symlink()
+            or not cached_plugin_path.is_dir()
+        ):
+            raise SkillBehaviorEvalError(
+                f"server-prepared plugin cache must be one physical directory below the standard cache root: "
+                f"{plugin_selector}"
+            )
         if _plugin_file_sha256_by_relative_path_map_get(
             plugin_source_path
         ) != _plugin_file_sha256_by_relative_path_map_get(cached_plugin_path):
@@ -1153,22 +1299,23 @@ def _plugin_selector_tuple_normalize(
         Values in deterministic immutable order.
     """
 
-    normalized_plugin_selector_list = tuple(selector.strip() for selector in plugin_selector_list)
-    if any(
-        selector.count("@") != 1 or not all(part.strip() for part in selector.split("@", 1))
-        for selector in normalized_plugin_selector_list
-    ):
-        raise SkillBehaviorEvalError("every --plugin must use exact NAME@MARKETPLACE form")
+    normalized_plugin_selector_list = tuple(plugin_selector_list)
+    for selector in normalized_plugin_selector_list:
+        if not isinstance(selector, str) or selector.count("@") != 1:
+            raise SkillBehaviorEvalError("every --plugin must use exact NAME@MARKETPLACE form")
+        plugin_name, marketplace_name = selector.split("@", 1)
+        _plugin_identity_validate(plugin_name, label="plugin selector name")
+        _plugin_identity_validate(marketplace_name, label="plugin selector marketplace")
     if len(normalized_plugin_selector_list) != len(set(normalized_plugin_selector_list)):
         raise SkillBehaviorEvalError("duplicate --plugin selectors are forbidden")
     return normalized_plugin_selector_list
 
 
-def _expected_plugin_source_binding_validate(
+def _required_plugin_source_binding_validate(
     case_list: Sequence[SkillBehaviorCase],
     plugin_selector_list: Sequence[str],
 ) -> None:
-    """Require every expected provider in the exact declared source set.
+    """Require every expected or forbidden provider in the declared source set.
 
     Args:
         case_list: Ordered case values.
@@ -1178,17 +1325,29 @@ def _expected_plugin_source_binding_validate(
     installed_plugin_name_set = {
         selector.split("@", 1)[0] for selector in _plugin_selector_tuple_normalize(plugin_selector_list)
     }
-    expected_plugin_name_set = {
+    required_plugin_name_set = {
         skill_name.split(":", 1)[0]
         for case in case_list
-        for skill_name in case.expected_skill_list
+        for skill_name in (*case.expected_skill_list, *case.forbidden_skill_list)
         if ":" in skill_name
     }
-    missing_plugin_name_list = sorted(expected_plugin_name_set - installed_plugin_name_set)
+    missing_plugin_name_list = sorted(required_plugin_name_set - installed_plugin_name_set)
     if missing_plugin_name_list:
         raise SkillBehaviorEvalError(
             "source binding omits plugins required by selected cases: " + ", ".join(missing_plugin_name_list)
         )
+
+
+def _plugin_identity_validate(value: str, *, label: str) -> None:
+    """Require one closed lowercase-hyphen plugin identity segment.
+
+    Args:
+        value: Candidate identity.
+        label: Diagnostic identity owner.
+    """
+
+    if _PLUGIN_IDENTITY_PATTERN.fullmatch(value) is None:
+        raise SkillBehaviorEvalError(f"{label} must be one closed single-segment identity")
 
 
 def _generation_payload_validate(payload: dict[str, Any], *, case: SkillBehaviorCase) -> dict[str, Any]:
@@ -1295,22 +1454,24 @@ def _case_evaluate(
         Resulting skill behavior case result.
     """
 
+    generation_invocation = model_call(
+        _generation_prompt_get(case),
+        case.working_directory,
+        _GENERATION_OUTPUT_SCHEMA,
+        invocation_config,
+    )
     generation_payload = _generation_payload_validate(
-        model_call(
-            _generation_prompt_get(case),
-            case.working_directory,
-            _GENERATION_OUTPUT_SCHEMA,
-            invocation_config,
-        ),
+        generation_invocation.payload,
         case=case,
     )
+    judge_invocation = model_call(
+        _judge_prompt_get(case=case, generation_payload=generation_payload),
+        case.working_directory,
+        _JUDGE_OUTPUT_SCHEMA,
+        invocation_config,
+    )
     judge_result_list = _judge_result_tuple_get(
-        model_call(
-            _judge_prompt_get(case=case, generation_payload=generation_payload),
-            case.working_directory,
-            _JUDGE_OUTPUT_SCHEMA,
-            invocation_config,
-        ),
+        judge_invocation.payload,
         case=case,
     )
     activated_skill_list = _activated_skill_tuple_normalize(
@@ -1331,6 +1492,8 @@ def _case_evaluate(
     )
     return SkillBehaviorCaseResult(
         activated_skill_list=activated_skill_list,
+        codex_usage_generation=generation_invocation.usage,
+        codex_usage_judge=judge_invocation.usage,
         forbidden_activated_skill_list=forbidden_activated_skill_list,
         id=case.id,
         missing_expected_skill_list=missing_expected_skill_list,
@@ -1387,8 +1550,18 @@ def _result_payload_get(
     """
 
     failed_case_id_list = [f"{result.suite}:{result.id}" for result in result_list if not result.passed]
+    codex_usage = CodexUsage(
+        cached_input_tokens=0,
+        cache_write_input_tokens=0,
+        input_tokens=0,
+        output_tokens=0,
+        reasoning_output_tokens=0,
+    )
+    for result in result_list:
+        codex_usage = codex_usage.add(result.codex_usage_generation).add(result.codex_usage_judge)
     return {
         "case_result_list": [asdict(result) for result in result_list],
+        "codex_usage": asdict(codex_usage),
         "failed_case_count": len(failed_case_id_list),
         "failed_case_id_list": failed_case_id_list,
         "model": invocation_config.model,
@@ -1482,13 +1655,12 @@ def main(argv_list: Sequence[str] | None = None) -> int:
                 print(f"{case.suite}:{case.id}")
             return 0
         standard_codex_home = Path(_standard_codex_process_environment_get()["HOME"]) / ".codex"
-        if args.plugin_marketplace_path_list or args.plugin_selector_list:
-            _preinstalled_plugin_source_binding_validate(
-                case_list=case_list,
-                marketplace_path_list=args.plugin_marketplace_path_list,
-                plugin_selector_list=args.plugin_selector_list,
-                standard_codex_home=standard_codex_home,
-            )
+        _preinstalled_plugin_source_binding_validate(
+            case_list=case_list,
+            marketplace_path_list=args.plugin_marketplace_path_list,
+            plugin_selector_list=args.plugin_selector_list,
+            standard_codex_home=standard_codex_home,
+        )
         invocation_config = ModelInvocationConfig(
             codex_bin=args.codex_bin,
             model=args.model,
