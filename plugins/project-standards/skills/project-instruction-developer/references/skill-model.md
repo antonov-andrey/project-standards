@@ -18,6 +18,7 @@
 - A skill that must be explicitly invoked sets `policy.allow_implicit_invocation: false`; prose alone does not implement that policy.
 - `policy.allow_implicit_invocation: true` is the default and MUST NOT be written without another meaningful metadata field that justifies the file.
 - The owner-local metadata checker validates only YAML readability, the exact default-prompt invocation, and the closed short-description length range. Whether metadata is meaningful, current, necessary, or semantically accurate remains a semantic review obligation.
+- A catalog summary MUST distinguish a skill capability or trigger from activation in the current task. It MUST NOT describe a skill as invoked or run unless that skill is actually selected.
 
 ## Behavioral Evaluation
 
