@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from yaml.events import AliasEvent, NodeEvent
+from yaml.nodes import MappingNode, ScalarNode
 
 DEFAULT_MODEL = "gpt-5.6-sol"
 DEFAULT_REASONING_EFFORT = "max"
@@ -49,6 +51,7 @@ _GENERATION_OUTPUT_SCHEMA: dict[str, Any] = {
         "response": {"type": "string", "minLength": 1},
     },
 }
+_SKILL_FRONTMATTER_FIELD_SET = {"description", "name"}
 
 _JUDGE_OUTPUT_SCHEMA: dict[str, Any] = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -211,6 +214,139 @@ class SkillBehaviorCaseResult:
     response: str
     semantic_invariant_result_list: tuple[SemanticInvariantResult, ...]
     suite: str
+
+
+@dataclass(frozen=True, slots=True)
+class SkillBehaviorCaseFailure:
+    """Preserve one failed case and every exact counter available at failure."""
+
+    codex_usage_generation: CodexUsage | None
+    codex_usage_judge: CodexUsage | None
+    error: str
+    id: str
+    suite: str
+
+
+class SkillBehaviorCaseEvaluationError(SkillBehaviorEvalError):
+    """Transport one typed case failure without discarding completed usage."""
+
+    def __init__(self, failure: SkillBehaviorCaseFailure) -> None:
+        """Store one closed failed-case value.
+
+        Args:
+            failure: Failed case and available exact counters.
+        """
+
+        super().__init__(failure.error)
+        self.failure = failure
+
+
+@dataclass(frozen=True, slots=True)
+class SkillBehaviorCaseAttempt:
+    """Contain exactly one successful result or one failed case."""
+
+    failure: SkillBehaviorCaseFailure | None
+    result: SkillBehaviorCaseResult | None
+
+    def __post_init__(self) -> None:
+        """Require exactly one terminal case outcome."""
+
+        if (self.failure is None) == (self.result is None):
+            raise SkillBehaviorEvalError("Case attempt must contain exactly one result or failure")
+
+
+@dataclass(frozen=True, slots=True)
+class SkillBehaviorEvaluationAttempt:
+    """Own all terminal case attempts from one fully drained submission set."""
+
+    case_attempt_list: tuple[SkillBehaviorCaseAttempt, ...]
+
+    def have_failure(self) -> bool:
+        """Return whether any submitted case failed before an acceptance result.
+
+        Returns:
+            True when at least one case attempt failed.
+        """
+
+        return any(attempt.failure is not None for attempt in self.case_attempt_list)
+
+    def non_acceptance_payload_get(self, invocation_config: ModelInvocationConfig) -> dict[str, Any]:
+        """Build one closed record that cannot represent an accepted evaluation.
+
+        Args:
+            invocation_config: Exact model invocation configuration.
+
+        Returns:
+            Closed non-acceptance attempt payload with all available exact counters.
+        """
+
+        if not self.have_failure():
+            raise SkillBehaviorEvalError("A successful evaluation cannot emit a non-acceptance attempt")
+        codex_usage = CodexUsage(
+            cached_input_tokens=0,
+            cache_write_input_tokens=0,
+            input_tokens=0,
+            output_tokens=0,
+            reasoning_output_tokens=0,
+        )
+        case_usage_list: list[dict[str, Any]] = []
+        for attempt in self.case_attempt_list:
+            if attempt.failure is not None:
+                failure = attempt.failure
+                generation_usage = failure.codex_usage_generation
+                judge_usage = failure.codex_usage_judge
+                case_usage_list.append(
+                    {
+                        "codex_usage_generation": asdict(generation_usage) if generation_usage is not None else None,
+                        "codex_usage_judge": asdict(judge_usage) if judge_usage is not None else None,
+                        "error": failure.error,
+                        "id": failure.id,
+                        "outcome": "failed",
+                        "suite": failure.suite,
+                    }
+                )
+            else:
+                if attempt.result is None:
+                    raise SkillBehaviorEvalError("Case attempt result is absent")
+                result = attempt.result
+                generation_usage = result.codex_usage_generation
+                judge_usage = result.codex_usage_judge
+                case_usage_list.append(
+                    {
+                        "codex_usage_generation": asdict(generation_usage),
+                        "codex_usage_judge": asdict(judge_usage),
+                        "error": "",
+                        "id": result.id,
+                        "outcome": "completed",
+                        "suite": result.suite,
+                    }
+                )
+            if generation_usage is not None:
+                codex_usage = codex_usage.add(generation_usage)
+            if judge_usage is not None:
+                codex_usage = codex_usage.add(judge_usage)
+        return {
+            "case_usage_list": case_usage_list,
+            "codex_usage": asdict(codex_usage),
+            "failure_count": sum(attempt.failure is not None for attempt in self.case_attempt_list),
+            "model": invocation_config.model,
+            "reasoning_effort": invocation_config.reasoning_effort,
+            "record_type": "skill-behavior-evaluation-non-acceptance",
+            "run_timestamp": datetime.now(UTC).isoformat(),
+            "schema_version": 1,
+            "total_case_count": len(self.case_attempt_list),
+        }
+
+    def result_list_get(self) -> list[SkillBehaviorCaseResult]:
+        """Return every successful result only for an acceptance-eligible attempt.
+
+        Returns:
+            Successful results in corpus order.
+        """
+
+        if self.have_failure():
+            raise SkillBehaviorEvalError("A failed evaluation attempt has no acceptance result list")
+        return [attempt.result for attempt in self.case_attempt_list if attempt.result is not None]
 
 
 ModelCall = Callable[[str, Path, dict[str, Any], ModelInvocationConfig], ModelInvocationResult]
@@ -1501,60 +1637,78 @@ def _case_evaluate(
         Resulting skill behavior case result.
     """
 
-    generation_invocation = model_call(
-        _generation_prompt_get(case),
-        case.working_directory,
-        _GENERATION_OUTPUT_SCHEMA,
-        invocation_config,
-    )
-    generation_payload = _generation_payload_validate(
-        generation_invocation.payload,
-        case=case,
-    )
-    activated_skill_list = _activated_skill_tuple_resolve(
-        generation_payload["activated_skill_list"],
-        case=case,
-        plugin_source_path_by_name_map=plugin_source_path_by_name_map,
-    )
-    _required_plugin_source_binding_validate(
-        [case],
-        plugin_source_path_by_name_map,
-        activated_skill_list=activated_skill_list,
-    )
-    judge_invocation = model_call(
-        _judge_prompt_get(case=case, generation_payload=generation_payload),
-        case.working_directory,
-        _JUDGE_OUTPUT_SCHEMA,
-        invocation_config,
-    )
-    judge_result_list = _judge_result_tuple_get(
-        judge_invocation.payload,
-        case=case,
-    )
-    activated_skill_set = set(activated_skill_list)
-    missing_expected_skill_list = tuple(
-        skill_name for skill_name in case.expected_skill_list if skill_name not in activated_skill_set
-    )
-    forbidden_activated_skill_list = tuple(
-        skill_name for skill_name in case.forbidden_skill_list if skill_name in activated_skill_set
-    )
-    passed = (
-        not missing_expected_skill_list
-        and not forbidden_activated_skill_list
-        and all(result.passed for result in judge_result_list)
-    )
-    return SkillBehaviorCaseResult(
-        activated_skill_list=activated_skill_list,
-        codex_usage_generation=generation_invocation.usage,
-        codex_usage_judge=judge_invocation.usage,
-        forbidden_activated_skill_list=forbidden_activated_skill_list,
-        id=case.id,
-        missing_expected_skill_list=missing_expected_skill_list,
-        passed=passed,
-        response=generation_payload["response"],
-        semantic_invariant_result_list=judge_result_list,
-        suite=case.suite,
-    )
+    generation_usage: CodexUsage | None = None
+    judge_usage: CodexUsage | None = None
+    try:
+        generation_invocation = model_call(
+            _generation_prompt_get(case),
+            case.working_directory,
+            _GENERATION_OUTPUT_SCHEMA,
+            invocation_config,
+        )
+        generation_usage = generation_invocation.usage
+        generation_payload = _generation_payload_validate(
+            generation_invocation.payload,
+            case=case,
+        )
+        activated_skill_list = _activated_skill_tuple_resolve(
+            generation_payload["activated_skill_list"],
+            case=case,
+            plugin_source_path_by_name_map=plugin_source_path_by_name_map,
+        )
+        _required_plugin_source_binding_validate(
+            [case],
+            plugin_source_path_by_name_map,
+            activated_skill_list=activated_skill_list,
+        )
+        judge_invocation = model_call(
+            _judge_prompt_get(case=case, generation_payload=generation_payload),
+            case.working_directory,
+            _JUDGE_OUTPUT_SCHEMA,
+            invocation_config,
+        )
+        judge_usage = judge_invocation.usage
+        judge_result_list = _judge_result_tuple_get(
+            judge_invocation.payload,
+            case=case,
+        )
+        activated_skill_set = set(activated_skill_list)
+        missing_expected_skill_list = tuple(
+            skill_name for skill_name in case.expected_skill_list if skill_name not in activated_skill_set
+        )
+        forbidden_activated_skill_list = tuple(
+            skill_name for skill_name in case.forbidden_skill_list if skill_name in activated_skill_set
+        )
+        passed = (
+            not missing_expected_skill_list
+            and not forbidden_activated_skill_list
+            and all(result.passed for result in judge_result_list)
+        )
+        return SkillBehaviorCaseResult(
+            activated_skill_list=activated_skill_list,
+            codex_usage_generation=generation_usage,
+            codex_usage_judge=judge_usage,
+            forbidden_activated_skill_list=forbidden_activated_skill_list,
+            id=case.id,
+            missing_expected_skill_list=missing_expected_skill_list,
+            passed=passed,
+            response=generation_payload["response"],
+            semantic_invariant_result_list=judge_result_list,
+            suite=case.suite,
+        )
+    except SkillBehaviorCaseEvaluationError:
+        raise
+    except Exception as error:
+        error_text = str(error) or type(error).__name__
+        raise SkillBehaviorCaseEvaluationError(
+            SkillBehaviorCaseFailure(
+                codex_usage_generation=generation_usage,
+                codex_usage_judge=judge_usage,
+                error=error_text,
+                id=case.id,
+                suite=case.suite,
+            )
+        ) from error
 
 
 def _plugin_source_path_validate(plugin_name: str, plugin_source_path: Path) -> Path:
@@ -1589,6 +1743,58 @@ def _plugin_source_path_validate(plugin_name: str, plugin_source_path: Path) -> 
     return resolved_plugin_source_path
 
 
+def _skill_frontmatter_get(skill_text: str, *, context: str, skill_path: Path) -> dict[str, str]:
+    """Parse one exact closed SKILL.md frontmatter document.
+
+    Args:
+        skill_text: Complete SKILL.md text.
+        context: Diagnostic owner text.
+        skill_path: Exact SKILL.md path.
+
+    Returns:
+        Exact required string fields.
+    """
+
+    line_list = skill_text.splitlines()
+    if not line_list or line_list[0] != "---":
+        raise SkillBehaviorEvalError(f"{context} SKILL.md frontmatter is invalid: {skill_path}")
+    try:
+        closing_index = line_list.index("---", 1)
+    except ValueError as error:
+        raise SkillBehaviorEvalError(f"{context} SKILL.md frontmatter is invalid: {skill_path}") from error
+    frontmatter_text = "\n".join(line_list[1:closing_index])
+    try:
+        event_list = list(yaml.parse(frontmatter_text))
+        if any(
+            isinstance(event, AliasEvent)
+            or isinstance(event, NodeEvent)
+            and (event.anchor is not None or event.tag is not None)
+            for event in event_list
+        ):
+            raise SkillBehaviorEvalError(f"{context} SKILL.md frontmatter is invalid: {skill_path}")
+        document_node_list = list(yaml.compose_all(frontmatter_text, Loader=yaml.SafeLoader))
+    except yaml.YAMLError as error:
+        raise SkillBehaviorEvalError(f"{context} SKILL.md frontmatter is invalid: {skill_path}") from error
+    if len(document_node_list) != 1 or not isinstance(document_node_list[0], MappingNode):
+        raise SkillBehaviorEvalError(f"{context} SKILL.md frontmatter is invalid: {skill_path}")
+    frontmatter: dict[str, str] = {}
+    for key_node, value_node in document_node_list[0].value:
+        if (
+            not isinstance(key_node, ScalarNode)
+            or key_node.tag != "tag:yaml.org,2002:str"
+            or key_node.value == "<<"
+            or key_node.value in frontmatter
+            or not isinstance(value_node, ScalarNode)
+            or value_node.tag != "tag:yaml.org,2002:str"
+            or not value_node.value
+        ):
+            raise SkillBehaviorEvalError(f"{context} SKILL.md frontmatter is invalid: {skill_path}")
+        frontmatter[key_node.value] = value_node.value
+    if set(frontmatter) != _SKILL_FRONTMATTER_FIELD_SET:
+        raise SkillBehaviorEvalError(f"{context} SKILL.md frontmatter is invalid: {skill_path}")
+    return frontmatter
+
+
 def _skill_path_resolve(
     owner_root: Path,
     relative_skill_path: Path,
@@ -1620,11 +1826,10 @@ def _skill_path_resolve(
         raise SkillBehaviorEvalError(f"{context} skill must be one physical SKILL.md: {raw_skill_path}")
     try:
         skill_text = skill_path.read_text(encoding="utf-8")
-        frontmatter_marker, frontmatter_text, _body = skill_text.split("---", 2)
-        frontmatter = yaml.safe_load(frontmatter_text)
-    except (OSError, UnicodeDecodeError, ValueError, yaml.YAMLError) as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         raise SkillBehaviorEvalError(f"{context} SKILL.md frontmatter is invalid: {skill_path}") from exc
-    if frontmatter_marker or not isinstance(frontmatter, dict) or frontmatter.get("name") != expected_skill_name:
+    frontmatter = _skill_frontmatter_get(skill_text, context=context, skill_path=skill_path)
+    if frontmatter["name"] != expected_skill_name:
         raise SkillBehaviorEvalError(f"{context} SKILL.md identity is mismatched: {skill_path}")
     return skill_path
 
@@ -1862,7 +2067,7 @@ def _case_list_evaluate(
     concurrency: int,
     invocation_config: ModelInvocationConfig,
     plugin_source_path_by_name_map: dict[str, Path],
-) -> list[SkillBehaviorCaseResult]:
+) -> SkillBehaviorEvaluationAttempt:
     """Evaluate cases concurrently while preserving corpus order in the result.
 
     Args:
@@ -1872,10 +2077,10 @@ def _case_list_evaluate(
         plugin_source_path_by_name_map: Exact validated provider source root by provider.
 
     Returns:
-        Requested values in deterministic order.
+        Fully drained terminal case attempts in deterministic corpus order.
     """
 
-    result_by_index_map: dict[int, SkillBehaviorCaseResult] = {}
+    attempt_by_index_map: dict[int, SkillBehaviorCaseAttempt] = {}
     with ThreadPoolExecutor(max_workers=min(concurrency, len(case_list))) as executor:
         future_by_index_map = {}
         for index, case in enumerate(case_list):
@@ -1888,10 +2093,31 @@ def _case_list_evaluate(
             )
             future_by_index_map[future] = index
         for future in as_completed(future_by_index_map):
-            result = future.result()
-            result_by_index_map[future_by_index_map[future]] = result
-            _result_print(result)
-    return [result_by_index_map[index] for index in range(len(case_list))]
+            index = future_by_index_map[future]
+            case = case_list[index]
+            try:
+                result = future.result()
+            except SkillBehaviorCaseEvaluationError as error:
+                failure = error.failure
+                print(f"ERROR {failure.suite}:{failure.id}: {failure.error}", flush=True)
+                attempt_by_index_map[index] = SkillBehaviorCaseAttempt(failure=failure, result=None)
+            except Exception as error:
+                error_text = str(error) or type(error).__name__
+                failure = SkillBehaviorCaseFailure(
+                    codex_usage_generation=None,
+                    codex_usage_judge=None,
+                    error=error_text,
+                    id=case.id,
+                    suite=case.suite,
+                )
+                print(f"ERROR {failure.suite}:{failure.id}: {failure.error}", flush=True)
+                attempt_by_index_map[index] = SkillBehaviorCaseAttempt(failure=failure, result=None)
+            else:
+                attempt_by_index_map[index] = SkillBehaviorCaseAttempt(failure=None, result=result)
+                _result_print(result)
+    return SkillBehaviorEvaluationAttempt(
+        case_attempt_list=tuple(attempt_by_index_map[index] for index in range(len(case_list)))
+    )
 
 
 def main(argv_list: Sequence[str] | None = None) -> int:
@@ -1928,12 +2154,19 @@ def main(argv_list: Sequence[str] | None = None) -> int:
             model=args.model,
             reasoning_effort=args.reasoning_effort,
         )
-        result_list = _case_list_evaluate(
+        evaluation_attempt = _case_list_evaluate(
             case_list,
             concurrency=args.concurrency,
             invocation_config=invocation_config,
             plugin_source_path_by_name_map=plugin_source_path_by_name_map,
         )
+        if evaluation_attempt.have_failure():
+            non_acceptance_payload = evaluation_attempt.non_acceptance_payload_get(invocation_config)
+            if args.output is not None:
+                _result_output_publish(args.output, non_acceptance_payload)
+            print(f"evaluation_failure_count={non_acceptance_payload['failure_count']}")
+            return 2
+        result_list = evaluation_attempt.result_list_get()
         result_payload = _result_payload_get(
             invocation_config=invocation_config,
             result_list=result_list,
