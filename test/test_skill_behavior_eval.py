@@ -592,8 +592,16 @@ def _corpus_write(
                         "working_directory": "..",
                         "working_directory_mode": "same-branch",
                         "prompt": "Review one Python function.",
-                        "expected_skill_list": expected_skill_list or ["project-standards:python-developer"],
-                        "forbidden_skill_list": forbidden_skill_list or ["agent-workflows:code-audit"],
+                        "expected_skill_list": (
+                            ["project-standards:python-developer"]
+                            if expected_skill_list is None
+                            else expected_skill_list
+                        ),
+                        "forbidden_skill_list": (
+                            ["agent-workflows:code-audit"]
+                            if forbidden_skill_list is None
+                            else forbidden_skill_list
+                        ),
                         "semantic_invariant_list": [
                             {
                                 "id": "bounded",
@@ -1253,6 +1261,10 @@ def test_case_evaluate_combines_activation_and_independent_judge(
             model="gpt-5.6-sol",
             reasoning_effort="medium",
         ),
+        plugin_selector_by_name_map={
+            "agent-workflows": "agent-workflows@agent-plugins",
+            "project-standards": "project-standards@project-standards",
+        },
         model_call=_model_call,
     )
 
@@ -1310,12 +1322,145 @@ def test_case_evaluate_reports_missing_and_forbidden_activations(
             model="gpt-5.6-sol",
             reasoning_effort="medium",
         ),
+        plugin_selector_by_name_map={
+            "agent-workflows": "agent-workflows@agent-plugins",
+            "project-standards": "project-standards@project-standards",
+        },
         model_call=lambda *_args: next(payload_list),
     )
 
     assert result.passed is False
     assert result.missing_expected_skill_list == ("project-standards:python-developer",)
     assert result.forbidden_activated_skill_list == ("agent-workflows:code-audit",)
+
+
+def test_case_evaluate_rejects_unbound_unexpected_activated_provider(tmp_path: Path) -> None:
+    """An unexpected activated provider must fail before semantic judging."""
+
+    module = _module_load()
+    corpus_path = tmp_path / "skill_behavior_eval/corpus-v1.json"
+    corpus_path.parent.mkdir()
+    _corpus_write(corpus_path, expected_skill_list=[], forbidden_skill_list=[])
+    case = module._corpus_case_list_load(corpus_path)[0]
+    call_count = 0
+
+    def _model_call(*_args: Any) -> Any:
+        nonlocal call_count
+        call_count += 1
+        return module.ModelInvocationResult(
+            payload={
+                "activated_skill_list": ["workflow-container-agent-tools:workflow-container-developer"],
+                "response": "Read-only response.",
+            },
+            usage=module.CodexUsage(**_codex_usage_payload()),
+        )
+
+    with pytest.raises(module.SkillBehaviorEvalError, match="workflow-container-agent-tools"):
+        module._case_evaluate(
+            case,
+            invocation_config=module.ModelInvocationConfig(
+                codex_bin="codex",
+                model="gpt-5.6-sol",
+                reasoning_effort="medium",
+            ),
+            plugin_selector_by_name_map={
+                "project-standards": "project-standards@project-standards"
+            },
+            model_call=_model_call,
+        )
+
+    assert call_count == 1
+
+
+def test_case_evaluate_accepts_exact_activated_provider_binding(tmp_path: Path) -> None:
+    """An additionally activated provider may proceed only through its exact binding."""
+
+    module = _module_load()
+    corpus_path = tmp_path / "skill_behavior_eval/corpus-v1.json"
+    corpus_path.parent.mkdir()
+    _corpus_write(corpus_path, expected_skill_list=[], forbidden_skill_list=[])
+    case = module._corpus_case_list_load(corpus_path)[0]
+    payload_list = iter(
+        [
+            module.ModelInvocationResult(
+                payload={
+                    "activated_skill_list": ["workflow-container-agent-tools:workflow-container-developer"],
+                    "response": "Read-only response.",
+                },
+                usage=module.CodexUsage(**_codex_usage_payload()),
+            ),
+            module.ModelInvocationResult(
+                payload={
+                    "invariant_result_list": [
+                        {"id": "bounded", "passed": True, "reason": "The response is read-only."}
+                    ]
+                },
+                usage=module.CodexUsage(**_codex_usage_payload()),
+            ),
+        ]
+    )
+
+    result = module._case_evaluate(
+        case,
+        invocation_config=module.ModelInvocationConfig(
+            codex_bin="codex",
+            model="gpt-5.6-sol",
+            reasoning_effort="medium",
+        ),
+        plugin_selector_by_name_map={
+            "workflow-container-agent-tools": (
+                "workflow-container-agent-tools@agent-plugins"
+            )
+        },
+        model_call=lambda *_args: next(payload_list),
+    )
+
+    assert result.passed is True
+    assert result.activated_skill_list == (
+        "workflow-container-agent-tools:workflow-container-developer",
+    )
+
+
+def test_case_evaluate_accepts_no_activation_with_no_required_provider(tmp_path: Path) -> None:
+    """An empty activation report adds no provider to the required source union."""
+
+    module = _module_load()
+    corpus_path = tmp_path / "skill_behavior_eval/corpus-v1.json"
+    corpus_path.parent.mkdir()
+    _corpus_write(corpus_path, expected_skill_list=[], forbidden_skill_list=[])
+    case = module._corpus_case_list_load(corpus_path)[0]
+    payload_list = iter(
+        [
+            module.ModelInvocationResult(
+                payload={"activated_skill_list": [], "response": "Read-only response."},
+                usage=module.CodexUsage(**_codex_usage_payload()),
+            ),
+            module.ModelInvocationResult(
+                payload={
+                    "invariant_result_list": [
+                        {"id": "bounded", "passed": True, "reason": "The response is read-only."}
+                    ]
+                },
+                usage=module.CodexUsage(**_codex_usage_payload()),
+            ),
+        ]
+    )
+
+    result = module._case_evaluate(
+        case,
+        invocation_config=module.ModelInvocationConfig(
+            codex_bin="codex",
+            model="gpt-5.6-sol",
+            reasoning_effort="medium",
+        ),
+        plugin_selector_by_name_map={
+            "project-standards": "project-standards@project-standards"
+        },
+        model_call=lambda *_args: next(payload_list),
+    )
+
+    assert result.passed is True
+    assert result.activated_skill_list == ()
 
 
 def test_activation_normalization_requires_one_unambiguous_provider_identity(
@@ -1348,7 +1493,8 @@ def test_activation_normalization_requires_one_unambiguous_provider_identity(
         suite=case.suite,
         working_directory=case.working_directory,
     )
-    assert module._activated_skill_tuple_normalize(["shared"], case=ambiguous_case) == ("shared",)
+    with pytest.raises(module.SkillBehaviorEvalError, match="ambiguous provider identity"):
+        module._activated_skill_tuple_normalize(["shared"], case=ambiguous_case)
 
 
 def test_case_list_evaluate_preserves_corpus_order(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -1376,7 +1522,12 @@ def test_case_list_evaluate_preserves_corpus_order(monkeypatch: pytest.MonkeyPat
         working_directory=first_case.working_directory,
     )
 
-    def _case_evaluate(case: Any, *, invocation_config: Any) -> Any:
+    def _case_evaluate(
+        case: Any,
+        *,
+        invocation_config: Any,
+        plugin_selector_by_name_map: dict[str, str],
+    ) -> Any:
         """Return the second case first.
 
         Args:
@@ -1411,6 +1562,10 @@ def test_case_list_evaluate_preserves_corpus_order(monkeypatch: pytest.MonkeyPat
             model="gpt-5.6-sol",
             reasoning_effort="medium",
         ),
+        plugin_selector_by_name_map={
+            "agent-workflows": "agent-workflows@agent-plugins",
+            "project-standards": "project-standards@project-standards",
+        },
     )
 
     assert [result.id for result in result_list] == ["case-a", "case-b"]
@@ -1605,12 +1760,16 @@ def test_preinstalled_plugin_binding_accepts_exact_server_cache(tmp_path: Path) 
         forbidden_skill_list=["project-standards:pytest-developer"],
     )
 
-    module._preinstalled_plugin_source_binding_validate(
+    plugin_selector_by_name_map = module._preinstalled_plugin_source_binding_validate(
         case_list=module._selected_case_list_get(case_id_list=[], corpus_path_list=[corpus_path]),
         marketplace_path_list=[marketplace_path],
         plugin_selector_list=["project-standards@provider-marketplace"],
         standard_codex_home=standard_codex_home,
     )
+
+    assert plugin_selector_by_name_map == {
+        "project-standards": "project-standards@provider-marketplace"
+    }
 
 
 def test_preinstalled_plugin_binding_ignores_runtime_bytecode_cache(
@@ -1773,6 +1932,26 @@ def test_plugin_selector_rejects_traversal_and_open_identities(selector: str) ->
         module._plugin_selector_tuple_normalize([selector])
 
 
+def test_activated_provider_binding_rejects_mismatched_and_ambiguous_sources() -> None:
+    """One activated provider must resolve to one matching declared selector."""
+
+    module = _module_load()
+
+    with pytest.raises(module.SkillBehaviorEvalError, match="ambiguous source bindings"):
+        module._plugin_selector_by_name_map_get(
+            [
+                "project-standards@first-marketplace",
+                "project-standards@second-marketplace",
+            ]
+        )
+    with pytest.raises(module.SkillBehaviorEvalError, match="identity is mismatched"):
+        module._required_plugin_source_binding_validate(
+            [],
+            {"project-standards": "agent-workflows@agent-plugins"},
+            activated_skill_list=["project-standards:python-developer"],
+        )
+
+
 @pytest.mark.parametrize("plugin_version", ["1", "01.0.0", "1.0.0/escape", "1.0.0+"])
 def test_preinstalled_plugin_binding_rejects_invalid_manifest_version(
     tmp_path: Path,
@@ -1868,7 +2047,7 @@ def test_required_plugin_source_binding_rejects_an_omitted_expected_provider(
     ):
         module._required_plugin_source_binding_validate(
             case_list,
-            ["agent-workflows@agent-plugins"],
+            {"agent-workflows": "agent-workflows@agent-plugins"},
         )
 
 
@@ -1889,7 +2068,7 @@ def test_required_plugin_source_binding_rejects_an_omitted_forbidden_provider(
     with pytest.raises(module.SkillBehaviorEvalError, match="agent-workflows"):
         module._required_plugin_source_binding_validate(
             case_list,
-            ["project-standards@project-standards"],
+            {"project-standards": "project-standards@project-standards"},
         )
 
 
@@ -1915,8 +2094,8 @@ def test_required_plugin_source_binding_accepts_complete_provider_set(
 
     module._required_plugin_source_binding_validate(
         case_list,
-        [
-            "project-standards@project-standards",
-            "agent-workflows@agent-plugins",
-        ],
+        {
+            "project-standards": "project-standards@project-standards",
+            "agent-workflows": "agent-workflows@agent-plugins",
+        },
     )

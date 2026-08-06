@@ -1149,7 +1149,7 @@ def _preinstalled_plugin_source_binding_validate(
     marketplace_path_list: Sequence[Path],
     plugin_selector_list: Sequence[str],
     standard_codex_home: Path,
-) -> None:
+) -> dict[str, str]:
     """Require server-prepared plugins to equal the declared local sources.
 
     Args:
@@ -1157,6 +1157,9 @@ def _preinstalled_plugin_source_binding_validate(
         marketplace_path_list: Ordered marketplace path values.
         plugin_selector_list: Ordered plugin selector values.
         standard_codex_home: Current OS user's standard Codex home.
+
+    Returns:
+        Exact validated source selector by provider.
     """
 
     if bool(marketplace_path_list) != bool(plugin_selector_list):
@@ -1167,7 +1170,8 @@ def _preinstalled_plugin_source_binding_validate(
         raise SkillBehaviorEvalError("every model run requires explicit --plugin-marketplace and --plugin binding")
 
     normalized_plugin_selector_list = _plugin_selector_tuple_normalize(plugin_selector_list)
-    _required_plugin_source_binding_validate(case_list, normalized_plugin_selector_list)
+    plugin_selector_by_name_map = _plugin_selector_by_name_map_get(normalized_plugin_selector_list)
+    _required_plugin_source_binding_validate(case_list, plugin_selector_by_name_map)
 
     raw_cache_root = standard_codex_home / "plugins/cache"
     try:
@@ -1291,6 +1295,7 @@ def _preinstalled_plugin_source_binding_validate(
             plugin_source_path
         ) != _plugin_file_sha256_by_relative_path_map_get(cached_plugin_path):
             raise SkillBehaviorEvalError(f"server-prepared plugin differs from its declared source: {plugin_selector}")
+    return plugin_selector_by_name_map
 
 
 def _plugin_selector_tuple_normalize(
@@ -1317,31 +1322,67 @@ def _plugin_selector_tuple_normalize(
     return normalized_plugin_selector_list
 
 
+def _plugin_selector_by_name_map_get(plugin_selector_list: Sequence[str]) -> dict[str, str]:
+    """Bind each plugin provider to exactly one declared source selector."""
+
+    plugin_selector_by_name_map: dict[str, str] = {}
+    for plugin_selector in _plugin_selector_tuple_normalize(plugin_selector_list):
+        plugin_name = plugin_selector.split("@", 1)[0]
+        if plugin_name in plugin_selector_by_name_map:
+            raise SkillBehaviorEvalError(f"plugin provider has ambiguous source bindings: {plugin_name}")
+        plugin_selector_by_name_map[plugin_name] = plugin_selector
+    return plugin_selector_by_name_map
+
+
 def _required_plugin_source_binding_validate(
     case_list: Sequence[SkillBehaviorCase],
-    plugin_selector_list: Sequence[str],
+    plugin_selector_by_name_map: dict[str, str],
+    *,
+    activated_skill_list: Sequence[str] = (),
 ) -> None:
-    """Require every expected or forbidden provider in the declared source set.
+    """Require every expected, forbidden or activated provider in the exact source set.
 
     Args:
         case_list: Ordered case values.
-        plugin_selector_list: Ordered plugin selector values.
+        plugin_selector_by_name_map: Exact validated source selector by provider.
+        activated_skill_list: Ordered normalized activated skill values.
     """
 
-    installed_plugin_name_set = {
-        selector.split("@", 1)[0] for selector in _plugin_selector_tuple_normalize(plugin_selector_list)
-    }
+    for plugin_name, plugin_selector in plugin_selector_by_name_map.items():
+        normalized_plugin_selector_list = _plugin_selector_tuple_normalize([plugin_selector])
+        if normalized_plugin_selector_list[0].split("@", 1)[0] != plugin_name:
+            raise SkillBehaviorEvalError(f"plugin provider source binding identity is mismatched: {plugin_name}")
     required_plugin_name_set = {
         skill_name.split(":", 1)[0]
         for case in case_list
         for skill_name in (*case.expected_skill_list, *case.forbidden_skill_list)
         if ":" in skill_name
     }
-    missing_plugin_name_list = sorted(required_plugin_name_set - installed_plugin_name_set)
+    required_plugin_name_set.update(_activated_plugin_name_set_get(activated_skill_list))
+    missing_plugin_name_list = sorted(required_plugin_name_set - set(plugin_selector_by_name_map))
     if missing_plugin_name_list:
         raise SkillBehaviorEvalError(
-            "source binding omits plugins required by selected cases: " + ", ".join(missing_plugin_name_list)
+            "source binding omits plugins required by selected cases or actual activation: "
+            + ", ".join(missing_plugin_name_list)
         )
+
+
+def _activated_plugin_name_set_get(activated_skill_list: Sequence[str]) -> set[str]:
+    """Derive each exact provider identity from normalized activated skills."""
+
+    activated_plugin_name_set: set[str] = set()
+    for activated_skill_name in activated_skill_list:
+        if ":" not in activated_skill_name:
+            continue
+        if activated_skill_name.count(":") != 1:
+            raise SkillBehaviorEvalError(
+                f"activated skill has ambiguous provider identity: {activated_skill_name}"
+            )
+        plugin_name, skill_name = activated_skill_name.split(":", 1)
+        _plugin_identity_validate(plugin_name, label="activated skill plugin name")
+        _plugin_identity_validate(skill_name, label="activated skill name")
+        activated_plugin_name_set.add(plugin_name)
+    return activated_plugin_name_set
 
 
 def _plugin_identity_validate(value: str, *, label: str) -> None:
@@ -1447,6 +1488,7 @@ def _case_evaluate(
     case: SkillBehaviorCase,
     *,
     invocation_config: ModelInvocationConfig,
+    plugin_selector_by_name_map: dict[str, str],
     model_call: ModelCall = _codex_payload_get,
 ) -> SkillBehaviorCaseResult:
     """Run generation and independent semantic judging for one case.
@@ -1454,6 +1496,7 @@ def _case_evaluate(
     Args:
         case: Case.
         invocation_config: Invocation config.
+        plugin_selector_by_name_map: Exact validated source selector by provider.
         model_call: Model call.
 
     Returns:
@@ -1470,6 +1513,15 @@ def _case_evaluate(
         generation_invocation.payload,
         case=case,
     )
+    activated_skill_list = _activated_skill_tuple_normalize(
+        generation_payload["activated_skill_list"],
+        case=case,
+    )
+    _required_plugin_source_binding_validate(
+        [case],
+        plugin_selector_by_name_map,
+        activated_skill_list=activated_skill_list,
+    )
     judge_invocation = model_call(
         _judge_prompt_get(case=case, generation_payload=generation_payload),
         case.working_directory,
@@ -1478,10 +1530,6 @@ def _case_evaluate(
     )
     judge_result_list = _judge_result_tuple_get(
         judge_invocation.payload,
-        case=case,
-    )
-    activated_skill_list = _activated_skill_tuple_normalize(
-        generation_payload["activated_skill_list"],
         case=case,
     )
     activated_skill_set = set(activated_skill_list)
@@ -1534,7 +1582,12 @@ def _activated_skill_tuple_normalize(
     normalized_skill_list: list[str] = []
     for activated_skill_name in activated_skill_list:
         candidate_list = canonical_skill_name_list_by_suffix_map.get(activated_skill_name, [])
-        normalized_skill_name = candidate_list[0] if len(candidate_list) == 1 else activated_skill_name
+        if len(candidate_list) > 1:
+            raise SkillBehaviorEvalError(
+                f"{case.suite}:{case.id}.generation activated skill has ambiguous provider identity: "
+                f"{activated_skill_name}"
+            )
+        normalized_skill_name = candidate_list[0] if candidate_list else activated_skill_name
         if normalized_skill_name not in normalized_skill_list:
             normalized_skill_list.append(normalized_skill_name)
     return tuple(normalized_skill_list)
@@ -1648,6 +1701,7 @@ def _case_list_evaluate(
     *,
     concurrency: int,
     invocation_config: ModelInvocationConfig,
+    plugin_selector_by_name_map: dict[str, str],
 ) -> list[SkillBehaviorCaseResult]:
     """Evaluate cases concurrently while preserving corpus order in the result.
 
@@ -1655,6 +1709,7 @@ def _case_list_evaluate(
         case_list: Ordered case values.
         concurrency: Concurrency.
         invocation_config: Invocation config.
+        plugin_selector_by_name_map: Exact validated source selector by provider.
 
     Returns:
         Requested values in deterministic order.
@@ -1669,6 +1724,7 @@ def _case_list_evaluate(
                 _case_evaluate,
                 case,
                 invocation_config=invocation_config,
+                plugin_selector_by_name_map=plugin_selector_by_name_map,
             )
             future_by_index_map[future] = index
         for future in as_completed(future_by_index_map):
@@ -1701,7 +1757,7 @@ def main(argv_list: Sequence[str] | None = None) -> int:
                 print(f"{case.suite}:{case.id}")
             return 0
         standard_codex_home = Path(_standard_codex_process_environment_get()["HOME"]) / ".codex"
-        _preinstalled_plugin_source_binding_validate(
+        plugin_selector_by_name_map = _preinstalled_plugin_source_binding_validate(
             case_list=case_list,
             marketplace_path_list=args.plugin_marketplace_path_list,
             plugin_selector_list=args.plugin_selector_list,
@@ -1716,6 +1772,7 @@ def main(argv_list: Sequence[str] | None = None) -> int:
             case_list,
             concurrency=args.concurrency,
             invocation_config=invocation_config,
+            plugin_selector_by_name_map=plugin_selector_by_name_map,
         )
         result_payload = _result_payload_get(
             invocation_config=invocation_config,
