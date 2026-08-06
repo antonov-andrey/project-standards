@@ -109,19 +109,6 @@ def _repository_create(repository: Path) -> None:
     _git_run(repository, ["commit", "-m", "Initial test state"])
 
 
-def test_invocation_timeout_is_opt_in() -> None:
-    """Model subprocesses should wait natively unless the caller owns a deadline."""
-
-    module = _module_load()
-    parser = module._argument_parser_get()
-
-    default_args = parser.parse_args(["--corpus", str(CORPUS_PATH)])
-    explicit_args = parser.parse_args(["--corpus", str(CORPUS_PATH), "--timeout-seconds", "60"])
-
-    assert default_args.timeout_seconds is None
-    assert explicit_args.timeout_seconds == 60
-
-
 def test_judge_prompt_evaluates_real_mutations_as_read_only_proposed_behavior(tmp_path: Path) -> None:
     """The judge cannot demand mutations that the generation sandbox explicitly forbids."""
 
@@ -721,7 +708,6 @@ def test_case_evaluate_combines_activation_and_independent_judge(
             codex_bin="codex",
             model="gpt-5.6-sol",
             reasoning_effort="medium",
-            timeout_seconds=60,
         ),
         model_call=_model_call,
     )
@@ -771,7 +757,6 @@ def test_case_evaluate_reports_missing_and_forbidden_activations(
             codex_bin="codex",
             model="gpt-5.6-sol",
             reasoning_effort="medium",
-            timeout_seconds=60,
         ),
         model_call=lambda *_args: next(payload_list),
     )
@@ -871,7 +856,6 @@ def test_case_list_evaluate_preserves_corpus_order(monkeypatch: pytest.MonkeyPat
             codex_bin="codex",
             model="gpt-5.6-sol",
             reasoning_effort="medium",
-            timeout_seconds=60,
         ),
     )
 

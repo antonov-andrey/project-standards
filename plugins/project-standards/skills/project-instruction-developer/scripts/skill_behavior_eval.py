@@ -91,7 +91,6 @@ class ModelInvocationConfig:
     codex_bin: str
     model: str
     reasoning_effort: str
-    timeout_seconds: int | None
     codex_home: Path | None = None
 
 
@@ -214,14 +213,6 @@ def _argument_parser_get() -> argparse.ArgumentParser:
         choices=("low", "medium", "high", "xhigh", "max", "ultra"),
         default=DEFAULT_REASONING_EFFORT,
         help=f"Reasoning effort for both model passes; default: {DEFAULT_REASONING_EFFORT}.",
-    )
-    parser.add_argument(
-        "--timeout-seconds",
-        type=_positive_int_get,
-        help=(
-            "Optional explicit timeout for each Codex invocation. By default, wait for native process completion; "
-            "set this only when the caller owns an external deadline."
-        ),
     )
     return parser
 
@@ -969,9 +960,8 @@ def _codex_payload_get(
                 env=environment_by_name_map,
                 input=prompt,
                 text=True,
-                timeout=invocation_config.timeout_seconds,
             )
-        except (OSError, subprocess.TimeoutExpired) as exc:
+        except OSError as exc:
             raise SkillBehaviorEvalError(f"Codex invocation failed: {exc}") from exc
         if completed_process.returncode != 0:
             stderr_tail = completed_process.stderr[-4000:].strip()
@@ -1014,7 +1004,7 @@ def _checked_codex_command_run(
             env=environment_by_name_map,
             text=True,
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
+    except OSError as exc:
         raise SkillBehaviorEvalError(f"{context}: Codex command failed: {exc}") from exc
     if completed_process.returncode != 0:
         stderr_tail = completed_process.stderr[-4000:].strip()
@@ -1519,7 +1509,6 @@ def main(argv_list: Sequence[str] | None = None) -> int:
                 codex_bin=args.codex_bin,
                 model=args.model,
                 reasoning_effort=args.reasoning_effort,
-                timeout_seconds=args.timeout_seconds,
                 codex_home=codex_home,
             )
             result_list = _case_list_evaluate(
