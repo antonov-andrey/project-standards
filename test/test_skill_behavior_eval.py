@@ -18,6 +18,10 @@ SCRIPT_PATH = (
     Path(__file__).resolve().parents[1]
     / "plugins/project-standards/skills/project-instruction-developer/scripts/skill_behavior_eval.py"
 )
+ACCEPTANCE_SCRIPT_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "plugins/project-standards/skills/project-instruction-developer/scripts/skill_behavior_acceptance.py"
+)
 CORPUS_PATH = Path(__file__).resolve().parents[1] / "skill_behavior_eval/corpus-v1.json"
 
 
@@ -35,6 +39,223 @@ def _module_load() -> ModuleType:
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _acceptance_module_load() -> ModuleType:
+    """Load the failed-subset acceptance planner as one isolated module."""
+
+    spec = importlib.util.spec_from_file_location("skill_behavior_acceptance", ACCEPTANCE_SCRIPT_PATH)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Cannot load {ACCEPTANCE_SCRIPT_PATH}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _acceptance_result_payload(
+    case_id_list: list[str],
+    *,
+    failed_case_id_list: list[str],
+) -> dict[str, Any]:
+    """Build one minimal current runner result for convergence tests."""
+
+    failed_case_id_set = set(failed_case_id_list)
+    return {
+        "schema_version": 2,
+        "model": "gpt-5.6-sol",
+        "reasoning_effort": "max",
+        "case_result_list": [
+            {
+                "suite": case_id.split(":", maxsplit=1)[0],
+                "id": case_id.split(":", maxsplit=1)[1],
+                "passed": case_id not in failed_case_id_set,
+            }
+            for case_id in case_id_list
+        ],
+        "failed_case_id_list": failed_case_id_list,
+    }
+
+
+def test_acceptance_cycle_converges_only_through_remaining_failed_subset() -> None:
+    """One cycle monotonically removes passes until the targeted result is empty."""
+
+    module = _acceptance_module_load()
+    first = _acceptance_result_payload(
+        ["provider:case-a", "provider:case-b", "provider:case-c"],
+        failed_case_id_list=["provider:case-b", "provider:case-c"],
+    )
+    second = _acceptance_result_payload(
+        ["provider:case-b", "provider:case-c"],
+        failed_case_id_list=["provider:case-c"],
+    )
+    third = _acceptance_result_payload(
+        ["provider:case-c"],
+        failed_case_id_list=[],
+    )
+
+    after_first = module.acceptance_state_get([first]).payload()
+    after_second = module.acceptance_state_get([first, second]).payload()
+    complete = module.acceptance_state_get([first, second, third]).payload()
+
+    assert after_first["failed_case_id_list"] == ["provider:case-b", "provider:case-c"]
+    assert after_first["next_case_argument_list"] == [
+        "--case",
+        "provider:case-b",
+        "--case",
+        "provider:case-c",
+    ]
+    assert after_second["failed_case_id_list"] == ["provider:case-c"]
+    assert after_second["passed_case_id_list"] == ["provider:case-a", "provider:case-b"]
+    assert complete["complete"] is True
+    assert complete["failed_case_id_list"] == []
+    assert complete["passed_case_id_list"] == [
+        "provider:case-a",
+        "provider:case-b",
+        "provider:case-c",
+    ]
+
+
+def test_acceptance_cycle_finishes_on_first_zero_failure_result() -> None:
+    """An initially clean selected set does not manufacture a targeted pass."""
+
+    module = _acceptance_module_load()
+    state = module.acceptance_state_get(
+        [
+            _acceptance_result_payload(
+                ["provider:case-a", "provider:case-b"],
+                failed_case_id_list=[],
+            )
+        ]
+    )
+
+    assert state.payload()["complete"] is True
+    assert state.completed_iteration_count == 1
+    assert state.payload()["next_case_argument_list"] == []
+
+
+def test_acceptance_cycle_rejects_replanning_one_passed_case() -> None:
+    """A passed case cannot re-enter a later targeted result in the same cycle."""
+
+    module = _acceptance_module_load()
+    first = _acceptance_result_payload(
+        ["provider:case-a", "provider:case-b"],
+        failed_case_id_list=["provider:case-b"],
+    )
+    repeated = _acceptance_result_payload(
+        ["provider:case-a", "provider:case-b"],
+        failed_case_id_list=[],
+    )
+
+    with pytest.raises(module.SkillBehaviorAcceptanceError, match="exactly the current failed case set"):
+        module.acceptance_state_get([first, repeated])
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("model", "another-model"),
+        ("reasoning_effort", "high"),
+    ],
+)
+def test_acceptance_cycle_requires_exact_target_model_configuration(
+    field_name: str,
+    value: str,
+) -> None:
+    """Every initial and targeted result uses the same canonical model configuration."""
+
+    module = _acceptance_module_load()
+    result = _acceptance_result_payload(["provider:case-a"], failed_case_id_list=[])
+    result[field_name] = value
+
+    with pytest.raises(module.SkillBehaviorAcceptanceError, match="gpt-5.6-sol"):
+        module.acceptance_state_get([result])
+
+
+def test_acceptance_cycle_rejects_failed_list_that_differs_from_case_outcomes() -> None:
+    """Scheduling consumes the exact runner failure set, not an unchecked summary."""
+
+    module = _acceptance_module_load()
+    result = _acceptance_result_payload(
+        ["provider:case-a", "provider:case-b"],
+        failed_case_id_list=["provider:case-b"],
+    )
+    result["failed_case_id_list"] = ["provider:case-a"]
+
+    with pytest.raises(module.SkillBehaviorAcceptanceError, match="differs from its case outcomes"):
+        module.acceptance_state_get([result])
+
+
+def test_acceptance_cli_reports_exact_next_case_arguments(tmp_path: Path) -> None:
+    """The reusable CLI turns immutable result JSON into direct repeated --case argv."""
+
+    first_path = tmp_path / "run-0.json"
+    first_path.write_text(
+        json.dumps(
+            _acceptance_result_payload(
+                ["provider:case-a", "provider:case-b"],
+                failed_case_id_list=["provider:case-b"],
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [sys.executable, str(ACCEPTANCE_SCRIPT_PATH), "--result", str(first_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert completed.stderr == ""
+    assert json.loads(completed.stdout)["next_case_argument_list"] == [
+        "--case",
+        "provider:case-b",
+    ]
+
+
+def test_runner_result_exposes_exact_failed_set_for_acceptance() -> None:
+    """The model runner emits the suite-qualified subset consumed by the planner."""
+
+    module = _module_load()
+    result_list = [
+        module.SkillBehaviorCaseResult(
+            activated_skill_list=(),
+            forbidden_activated_skill_list=(),
+            id="case-a",
+            missing_expected_skill_list=(),
+            passed=True,
+            response="accepted",
+            semantic_invariant_result_list=(),
+            suite="provider",
+        ),
+        module.SkillBehaviorCaseResult(
+            activated_skill_list=(),
+            forbidden_activated_skill_list=(),
+            id="case-b",
+            missing_expected_skill_list=(),
+            passed=False,
+            response="needs classification",
+            semantic_invariant_result_list=(),
+            suite="provider",
+        ),
+    ]
+
+    payload = module._result_payload_get(
+        invocation_config=module.ModelInvocationConfig(
+            codex_bin="codex",
+            model=module.DEFAULT_MODEL,
+            reasoning_effort=module.DEFAULT_REASONING_EFFORT,
+        ),
+        result_list=result_list,
+    )
+
+    assert payload["schema_version"] == 2
+    assert payload["model"] == "gpt-5.6-sol"
+    assert payload["reasoning_effort"] == "max"
+    assert payload["failed_case_count"] == 1
+    assert payload["failed_case_id_list"] == ["provider:case-b"]
 
 
 def _corpus_write(path: Path, *, expected_skill_list: list[str] | None = None) -> None:

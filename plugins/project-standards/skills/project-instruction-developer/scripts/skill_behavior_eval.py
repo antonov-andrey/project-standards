@@ -17,8 +17,9 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_MODEL = "gpt-5.6-sol"
-DEFAULT_REASONING_EFFORT = "medium"
-SCHEMA_VERSION = 1
+DEFAULT_REASONING_EFFORT = "max"
+CORPUS_SCHEMA_VERSION = 1
+RESULT_SCHEMA_VERSION = 2
 WORKING_DIRECTORY_MODE_SET = {"same-branch", "synchronized-main"}
 
 _GENERATION_OUTPUT_SCHEMA: dict[str, Any] = {
@@ -704,9 +705,10 @@ def _corpus_case_list_load(
         context=str(resolved_corpus_path),
         required_key_set={"case_list", "schema_version", "suite"},
     )
-    if type(payload["schema_version"]) is not int or payload["schema_version"] != SCHEMA_VERSION:
+    if type(payload["schema_version"]) is not int or payload["schema_version"] != CORPUS_SCHEMA_VERSION:
         raise SkillBehaviorEvalError(
-            f"{resolved_corpus_path}: schema_version must equal {SCHEMA_VERSION}, got {payload['schema_version']!r}"
+            f"{resolved_corpus_path}: schema_version must equal {CORPUS_SCHEMA_VERSION}, "
+            f"got {payload['schema_version']!r}"
         )
     suite = _non_empty_string_get(payload, context=str(resolved_corpus_path), field_name="suite")
     raw_case_list = payload["case_list"]
@@ -1390,13 +1392,15 @@ def _result_payload_get(
         The serializable run result.
     """
 
+    failed_case_id_list = [f"{result.suite}:{result.id}" for result in result_list if not result.passed]
     return {
         "case_result_list": [asdict(result) for result in result_list],
-        "failed_case_count": sum(not result.passed for result in result_list),
+        "failed_case_count": len(failed_case_id_list),
+        "failed_case_id_list": failed_case_id_list,
         "model": invocation_config.model,
         "reasoning_effort": invocation_config.reasoning_effort,
         "run_timestamp": datetime.now(UTC).isoformat(),
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": RESULT_SCHEMA_VERSION,
         "total_case_count": len(result_list),
     }
 

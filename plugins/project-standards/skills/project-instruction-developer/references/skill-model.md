@@ -22,6 +22,7 @@
 
 ## Behavioral Evaluation
 
+- The complete reusable acceptance procedure is owned by `behavioral-evaluation.md` and MUST be read before a model-based corpus acceptance cycle.
 - Provider repositories with overlapping or non-trivial skill triggers MUST keep a versioned activation and output-evaluation corpus.
 - The corpus MUST cover direct, indirect, incomplete, negative, and overlap cases, with expected and forbidden activation sets plus semantic output invariants.
 - Model-based evaluation is an opt-in acceptance phase separate from deterministic validators, `pytest`, and mechanical standard checkers. It MUST use the target model generation and MUST NOT turn semantic output invariants into substring, heading, or keyword checks.

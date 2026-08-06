@@ -334,6 +334,31 @@
       ]
     },
     {
+      "id": "instruction-behavior-eval-failed-subset",
+      "working_directory": "..",
+      "working_directory_mode": "same-branch",
+      "prompt": "A max-effort behavior corpus pass has several failures. Explain the reusable acceptance workflow for classifying and fixing them, selecting the next model pass, and deciding when the cycle is complete. Do not change files or run the corpus.",
+      "expected_skill_list": [
+        "project-standards:project-foundation",
+        "project-standards:project-instruction-developer"
+      ],
+      "forbidden_skill_list": [
+        "project-standards:project-standard-audit",
+        "agent-workflows:code-audit",
+        "agent-workflows:instruction-audit"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "canonical-failure-classification",
+          "text": "For every current failure, the response first compares the generated answer and judge decision with the canonical contract, then fixes either the real instruction owner defect or the owning corpus/evaluator defect; judge output is diagnostic and production instructions are not tuned to one stochastic answer."
+        },
+        {
+          "id": "monotonic-failed-subset",
+          "text": "The response handles all current failures together, then reruns only the preceding failed suite-qualified IDs through repeated --case arguments on gpt-5.6-sol with max effort; passed cases never re-enter the cycle and the first zero-failure result is terminal evidence."
+        }
+      ]
+    },
+    {
       "id": "indirect-python-orchestration-ownership",
       "working_directory": "../../workflow-control-center",
       "working_directory_mode": "synchronized-main",
