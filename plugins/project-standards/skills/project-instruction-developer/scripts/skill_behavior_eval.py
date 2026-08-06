@@ -18,7 +18,6 @@ from typing import Any
 
 DEFAULT_MODEL = "gpt-5.6-sol"
 DEFAULT_REASONING_EFFORT = "medium"
-DEFAULT_TIMEOUT_SECONDS = 600
 SCHEMA_VERSION = 1
 WORKING_DIRECTORY_MODE_SET = {"same-branch", "synchronized-main"}
 
@@ -92,7 +91,7 @@ class ModelInvocationConfig:
     codex_bin: str
     model: str
     reasoning_effort: str
-    timeout_seconds: int
+    timeout_seconds: int | None
     codex_home: Path | None = None
 
 
@@ -218,9 +217,11 @@ def _argument_parser_get() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--timeout-seconds",
-        default=DEFAULT_TIMEOUT_SECONDS,
         type=_positive_int_get,
-        help=f"Timeout for each Codex invocation; default: {DEFAULT_TIMEOUT_SECONDS}.",
+        help=(
+            "Optional explicit timeout for each Codex invocation. By default, wait for native process completion; "
+            "set this only when the caller owns an external deadline."
+        ),
     )
     return parser
 
@@ -1012,7 +1013,6 @@ def _checked_codex_command_run(
             capture_output=True,
             env=environment_by_name_map,
             text=True,
-            timeout=DEFAULT_TIMEOUT_SECONDS,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise SkillBehaviorEvalError(f"{context}: Codex command failed: {exc}") from exc
