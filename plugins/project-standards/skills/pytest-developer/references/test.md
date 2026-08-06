@@ -46,6 +46,18 @@
   - shared imported test helper code MUST live under owner-local `test/lib/**`,
   - non-code fixtures and other non-imported support artifacts MAY live under other clearly named owner-local `test` branches such as `test/fixtures/**`.
 
+## Test Failure Workflow
+
+- Inspect the failed test before you change production code, test expectations, or instructions.
+- Inspect its owner-local helpers, fixtures, and adjacent explanatory comments.
+- Treat test code as the executable verification contract.
+- Use comments and docstrings only to clarify special cases.
+- Identify the root cause without weakening required coverage.
+- Fix the root cause when it is in scope.
+- Run the smallest affected test after the fix.
+- Run the original test command after that test passes.
+- Report the exact command and evidence when an external blocker prevents a fix.
+
 ## Test Quality And Coverage Contract
 
 - Tests MUST NOT verify instruction artifacts by checking exact prose, headings, examples, file presence, path references, or placement rules; instruction artifacts require semantic review instead of executable text assertions.
@@ -59,6 +71,3 @@
   - the success path,
   - the primary contract-defining failure path,
   - every critical edge case or branch introduced by the change.
-- When one repository test or code-contract checker fails, inspect the failing test implementation itself before changing production code, test expectations, or instructions.
-- That inspection MUST include the failing test body, owner-local test helpers, fixtures, and any adjacent docstring or comments that clarify the exact checker scope.
-- Test code is the executable verification contract; comments and docstrings may clarify special cases, but they MUST NOT be treated as stronger than the implemented assertion logic.
