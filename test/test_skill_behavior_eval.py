@@ -1219,6 +1219,26 @@ def test_preinstalled_plugin_binding_accepts_exact_server_cache(tmp_path: Path) 
     )
 
 
+def test_preinstalled_plugin_binding_ignores_runtime_bytecode_cache(tmp_path: Path) -> None:
+    """Runtime bytecode is worker state and cannot become provider source identity."""
+
+    module = _module_load()
+    marketplace_path, standard_codex_home = _plugin_binding_fixture_create(tmp_path)
+    source_bytecode_path = marketplace_path / "plugins/project-standards/__pycache__/source.cpython-314.pyc"
+    source_bytecode_path.parent.mkdir()
+    source_bytecode_path.write_bytes(b"source-runtime-cache")
+    cache_bytecode_path = next(standard_codex_home.glob("plugins/cache/*/*/*")) / "__pycache__/source.cpython-314.pyc"
+    cache_bytecode_path.parent.mkdir()
+    cache_bytecode_path.write_bytes(b"installed-runtime-cache")
+
+    module._preinstalled_plugin_source_binding_validate(
+        case_list=[],
+        marketplace_path_list=[marketplace_path],
+        plugin_selector_list=["project-standards@provider-marketplace"],
+        standard_codex_home=standard_codex_home,
+    )
+
+
 def test_preinstalled_plugin_binding_rejects_cache_drift(tmp_path: Path) -> None:
     """A stale or different server cache cannot stand in for the declared source."""
 

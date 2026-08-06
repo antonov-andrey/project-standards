@@ -1000,18 +1000,20 @@ def _standard_codex_process_environment_get(
 
 
 def _plugin_file_sha256_by_relative_path_map_get(root: Path) -> dict[str, str]:
-    """Return one exact ordinary-file snapshot for a plugin tree."""
+    """Return one exact source-file snapshot for a plugin tree."""
 
     file_sha256_by_relative_path_map: dict[str, str] = {}
     for path in sorted(root.rglob("*")):
+        relative_path = path.relative_to(root)
+        if "__pycache__" in relative_path.parts or path.suffix == ".pyc":
+            continue
         if path.is_symlink():
             raise SkillBehaviorEvalError(f"plugin tree contains a symbolic link: {path}")
         if path.is_dir():
             continue
         if not path.is_file():
             raise SkillBehaviorEvalError(f"plugin tree contains a non-file entry: {path}")
-        relative_path = path.relative_to(root).as_posix()
-        file_sha256_by_relative_path_map[relative_path] = hashlib.sha256(path.read_bytes()).hexdigest()
+        file_sha256_by_relative_path_map[relative_path.as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
     return file_sha256_by_relative_path_map
 
 
