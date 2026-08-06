@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import os
 import subprocess
@@ -577,6 +578,10 @@ def _corpus_write(
         forbidden_skill_list: Forbidden skill list.
     """
 
+    repository = path.parent.parent if path.parent.name == "skill_behavior_eval" else path.parent
+    if not (repository / ".git").exists():
+        _repository_create(repository)
+    working_directory = ".." if path.parent.name == "skill_behavior_eval" else "."
     path.write_text(
         json.dumps(
             {
@@ -585,7 +590,7 @@ def _corpus_write(
                 "case_list": [
                     {
                         "id": "case-a",
-                        "working_directory": "..",
+                        "working_directory": working_directory,
                         "working_directory_mode": "same-branch",
                         "prompt": "Review one Python function.",
                         "expected_skill_list": (
@@ -874,6 +879,9 @@ def test_skill_path_resolve_rejects_noncanonical_frontmatter(
         "'-01'",
         "'01.2'",
         "'01e2'",
+        "-0o7",
+        "+0x3A",
+        "+.NaN",
     ],
 )
 def test_skill_path_resolve_accepts_exact_frontmatter_delimiter_lines(description: str, tmp_path: Path) -> None:
@@ -931,7 +939,7 @@ def _repository_create(repository: Path) -> None:
         repository: Exact Git repository root.
     """
 
-    repository.mkdir()
+    repository.mkdir(exist_ok=True)
     _git_run(repository, ["init", "-b", "main"])
     _git_run(repository, ["config", "user.email", "test@example.com"])
     _git_run(repository, ["config", "user.name", "Behavior Eval Test"])
@@ -1038,6 +1046,53 @@ def test_corpus_load_resolves_working_directory(tmp_path: Path) -> None:
     assert len(case_list) == 1
     assert case_list[0].working_directory == repository.resolve()
     assert case_list[0].semantic_invariant_list[0].id == "bounded"
+
+
+def test_corpus_load_rejects_non_git_owner(tmp_path: Path) -> None:
+    """A corpus cannot use one ambient non-Git directory as its owner."""
+
+    module = _module_load()
+    corpus_path = tmp_path / "corpus-v1.json"
+    corpus_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "suite": "provider",
+                "case_list": [
+                    {
+                        "id": "case-a",
+                        "working_directory": ".",
+                        "working_directory_mode": "same-branch",
+                        "prompt": "Review one Python function.",
+                        "expected_skill_list": [],
+                        "forbidden_skill_list": [],
+                        "semantic_invariant_list": [{"id": "bounded", "text": "The response remains read-only."}],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(module.SkillBehaviorEvalError, match="corpus worktree"):
+        module._corpus_case_list_load(corpus_path)
+
+
+def test_corpus_load_rejects_symbolic_owner_path(tmp_path: Path) -> None:
+    """A symbolic path cannot stand in for the physical corpus worktree owner."""
+
+    module = _module_load()
+    repository = tmp_path / "repository"
+    _repository_create(repository)
+    corpus_root = repository / "skill_behavior_eval"
+    corpus_root.mkdir()
+    corpus_path = corpus_root / "corpus-v1.json"
+    _corpus_write(corpus_path)
+    symbolic_repository = tmp_path / "symbolic-repository"
+    symbolic_repository.symlink_to(repository, target_is_directory=True)
+
+    with pytest.raises(module.SkillBehaviorEvalError, match="physical path"):
+        module._corpus_case_list_load(symbolic_repository / "skill_behavior_eval/corpus-v1.json")
 
 
 def test_case_selection_does_not_resolve_unselected_runtime_root(
@@ -2106,6 +2161,31 @@ def test_activation_normalization_requires_one_unambiguous_provider_identity(
         )
 
 
+def test_project_local_skill_rejects_non_git_owner(tmp_path: Path) -> None:
+    """Project-local activation never falls back to one ambient directory."""
+
+    module = _module_load()
+    skill_path = tmp_path / ".agents/skills/local-review/SKILL.md"
+    skill_path.parent.mkdir(parents=True)
+    skill_path.write_text(
+        "---\nname: local-review\ndescription: Review local code.\n---\n",
+        encoding="utf-8",
+    )
+    case = module.SkillBehaviorCase(
+        corpus_path=tmp_path / "corpus-v1.json",
+        expected_skill_list=(),
+        forbidden_skill_list=(),
+        id="case-a",
+        prompt="Review.",
+        semantic_invariant_list=(),
+        suite="provider",
+        working_directory=tmp_path,
+    )
+
+    with pytest.raises(module.SkillBehaviorEvalError, match="project-local skill owner"):
+        module._project_local_skill_path_get(case, "local-review")
+
+
 def test_case_list_evaluate_preserves_corpus_order(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Concurrent completion order must not change the serialized corpus order.
 
@@ -2413,6 +2493,55 @@ def test_case_list_evaluate_drains_submitted_future_after_submission_failure(
     assert "submission-secret-sentinel" not in json.dumps(payload)
 
 
+def test_case_list_evaluate_preserves_results_when_stdout_is_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A closed progress stream cannot discard one completed result or its usage."""
+
+    module = _module_load()
+    corpus_path = tmp_path / "skill_behavior_eval/corpus-v1.json"
+    corpus_path.parent.mkdir()
+    _corpus_write(corpus_path)
+    case = module._corpus_case_list_load(corpus_path)[0]
+
+    def _case_evaluate(*_args: Any, **_kwargs: Any) -> Any:
+        """Return one completed case with exact generation and judge usage."""
+
+        return module.SkillBehaviorCaseResult(
+            activated_skill_list=(),
+            codex_usage_generation=module.CodexUsage(**_codex_usage_payload()),
+            codex_usage_judge=module.CodexUsage(**_codex_usage_payload(2)),
+            forbidden_activated_skill_list=(),
+            id=case.id,
+            missing_expected_skill_list=(),
+            passed=True,
+            response="response",
+            semantic_invariant_result_list=(),
+            suite=case.suite,
+        )
+
+    monkeypatch.setattr(module, "_case_evaluate", _case_evaluate)
+    closed_stdout = io.StringIO()
+    closed_stdout.close()
+    monkeypatch.setattr(sys, "stdout", closed_stdout)
+
+    evaluation_attempt = module._case_list_evaluate(
+        [case],
+        concurrency=1,
+        invocation_config=module.ModelInvocationConfig(
+            codex_bin="codex",
+            model="gpt-5.6-sol",
+            reasoning_effort="medium",
+        ),
+        plugin_source_binding_by_name_map={},
+    )
+
+    result = evaluation_attempt.result_list_get()[0]
+    assert result.codex_usage_generation == module.CodexUsage(**_codex_usage_payload())
+    assert result.codex_usage_judge == module.CodexUsage(**_codex_usage_payload(2))
+
+
 def _plugin_binding_fixture_create(
     tmp_path: Path,
     *,
@@ -2600,7 +2729,7 @@ def test_codex_invocation_uses_standard_home_persistent_session_and_native_wait(
     environment = {"HOME": "/home/test-user", "PATH": "/usr/bin"}
     run_call_list: list[tuple[list[str], dict[str, Any]]] = []
 
-    def _run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+    def _run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
         run_call_list.append((command, kwargs))
         output_path = Path(command[command.index("--output-last-message") + 1])
         output_path.write_text('{"response":"ok"}\n', encoding="utf-8")
@@ -2611,8 +2740,8 @@ def test_codex_invocation_uses_standard_home_persistent_session_and_native_wait(
         return subprocess.CompletedProcess(
             command,
             0,
-            stdout="\n".join(json.dumps(event) for event in event_list) + "\n",
-            stderr="",
+            stdout=("\n".join(json.dumps(event) for event in event_list) + "\n").encode("utf-8"),
+            stderr=b"",
         )
 
     monkeypatch.setattr(module, "_standard_codex_process_environment_get", lambda: environment)
@@ -2634,6 +2763,8 @@ def test_codex_invocation_uses_standard_home_persistent_session_and_native_wait(
     assert run_keyword_by_name_map["env"] == environment
     assert "CODEX_HOME" not in run_keyword_by_name_map["env"]
     assert "timeout" not in run_keyword_by_name_map
+    assert run_keyword_by_name_map["input"] == b"prompt"
+    assert "text" not in run_keyword_by_name_map
 
 
 @pytest.mark.parametrize(
@@ -2662,7 +2793,7 @@ def test_codex_invocation_failure_extracts_usage_before_completion_validation(
 
     module = _module_load()
 
-    def _run(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+    def _run(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[bytes]:
         """Return one completed process with exact usage and selected output.
 
         Args:
@@ -2682,8 +2813,8 @@ def test_codex_invocation_failure_extracts_usage_before_completion_validation(
         return subprocess.CompletedProcess(
             command,
             return_code,
-            stdout="\n".join(json.dumps(event) for event in event_list) + "\n",
-            stderr="raw-stderr-secret",
+            stdout=("\n".join(json.dumps(event) for event in event_list) + "\n").encode("utf-8"),
+            stderr=b"raw-stderr-secret",
         )
 
     monkeypatch.setattr(module, "_standard_codex_process_environment_get", lambda: {"HOME": "/home/test-user"})
@@ -2725,13 +2856,13 @@ def test_codex_invocation_rejects_duplicate_output_keys_with_usage(
 
     module = _module_load()
 
-    def _run(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+    def _run(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[bytes]:
         """Write duplicate output and return one exact completed usage event."""
 
         output_path = Path(command[command.index("--output-last-message") + 1])
         output_path.write_text(output_text, encoding="utf-8")
         event = {"type": "turn.completed", "usage": _codex_usage_payload()}
-        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(event) + "\n", stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout=(json.dumps(event) + "\n").encode("utf-8"), stderr=b"")
 
     monkeypatch.setattr(module, "_standard_codex_process_environment_get", lambda: {"HOME": "/home/test-user"})
     monkeypatch.setattr(module.subprocess, "run", _run)
@@ -2748,17 +2879,20 @@ def test_codex_invocation_rejects_duplicate_output_keys_with_usage(
     assert error_info.value.failure.usage == module.CodexUsage(**_codex_usage_payload())
 
 
+@pytest.mark.parametrize("stream_name", ["output", "stderr"])
 @pytest.mark.parametrize("failure_stage", ["generation", "judge"])
-def test_case_evaluate_closes_invalid_utf8_output_with_stage_usage(
+def test_case_evaluate_closes_invalid_utf8_stream_with_stage_usage(
     failure_stage: str,
     monkeypatch: pytest.MonkeyPatch,
+    stream_name: str,
     tmp_path: Path,
 ) -> None:
-    """Invalid UTF-8 generation and judge output retain already extracted usage.
+    """Invalid UTF-8 generation and judge streams retain already extracted usage.
 
     Args:
         failure_stage: Model stage that emits invalid UTF-8.
         monkeypatch: Pytest mutation fixture.
+        stream_name: Invalid process stream or output file.
         tmp_path: Temporary directory path.
     """
 
@@ -2769,22 +2903,33 @@ def test_case_evaluate_closes_invalid_utf8_output_with_stage_usage(
     case = module._corpus_case_list_load(corpus_path)[0]
     invocation_count = 0
 
-    def _run(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+    def _run(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[bytes]:
         """Write valid generation or invalid selected-stage output with exact usage."""
 
         nonlocal invocation_count
         invocation_count += 1
         current_stage = "generation" if invocation_count == 1 else "judge"
         output_path = Path(command[command.index("--output-last-message") + 1])
-        if current_stage == failure_stage:
+        if current_stage == failure_stage and stream_name == "output":
             output_path.write_bytes(b"\xff")
-        else:
+        elif current_stage == "generation":
             output_path.write_text(
                 '{"activated_skill_list":[],"response":"Read-only response."}\n',
                 encoding="utf-8",
             )
+        else:
+            output_path.write_text(
+                '{"invariant_result_list":[{"id":"bounded","passed":true,"reason":"Read-only."}]}\n',
+                encoding="utf-8",
+            )
         event = {"type": "turn.completed", "usage": _codex_usage_payload(invocation_count)}
-        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(event) + "\n", stderr="")
+        stderr = b"\xff" if current_stage == failure_stage and stream_name == "stderr" else b""
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=(json.dumps(event) + "\n").encode("utf-8"),
+            stderr=stderr,
+        )
 
     monkeypatch.setattr(module, "_standard_codex_process_environment_get", lambda: {"HOME": "/home/test-user"})
     monkeypatch.setattr(module.subprocess, "run", _run)
@@ -2900,7 +3045,7 @@ def test_non_acceptance_surfaces_redact_raw_codex_streams(
     stdout_secret = "stdout-secret-sentinel"
     stderr_secret = "stderr-secret-sentinel"
 
-    def _run(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+    def _run(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[bytes]:
         """Return one nonzero process containing both stream sentinels.
 
         Args:
@@ -2918,8 +3063,8 @@ def test_non_acceptance_surfaces_redact_raw_codex_streams(
         return subprocess.CompletedProcess(
             command,
             9,
-            stdout="\n".join(json.dumps(event) for event in event_list) + "\n",
-            stderr=stderr_secret,
+            stdout=("\n".join(json.dumps(event) for event in event_list) + "\n").encode("utf-8"),
+            stderr=stderr_secret.encode("utf-8"),
         )
 
     monkeypatch.setattr(module, "_standard_codex_process_environment_get", lambda: {"HOME": "/home/test-user"})

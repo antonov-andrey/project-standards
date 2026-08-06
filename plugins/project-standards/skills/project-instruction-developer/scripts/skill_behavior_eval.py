@@ -40,10 +40,9 @@ _SEMVER_PATTERN = re.compile(
 )
 _YAML_12_NON_STRING_PLAIN_SCALAR_PATTERN = re.compile(
     r"(?:~|null|Null|NULL|true|True|TRUE|false|False|FALSE|"
-    r"[-+]?(?:[0-9]+|0o[0-7]+|0x[0-9a-fA-F]+)|"
-    r"[-+]?(?:[0-9]+\.[0-9]*(?:[eE][-+]?[0-9]+)?|"
-    r"\.[0-9]+(?:[eE][-+]?[0-9]+)?|[0-9]+(?:[eE][-+]?[0-9]+)|"
-    r"\.inf|\.Inf|\.INF|\.nan|\.NaN|\.NAN))"
+    r"[-+]?[0-9]+|0o[0-7]+|0x[0-9a-fA-F]+|"
+    r"[-+]?(?:(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)(?:[eE][-+]?[0-9]+)?|"
+    r"\.inf|\.Inf|\.INF)|\.nan|\.NaN|\.NAN)"
 )
 
 _GENERATION_OUTPUT_SCHEMA: dict[str, Any] = {
@@ -912,6 +911,58 @@ def _git_worktree_record_list_get(repository_root: Path, *, context: str) -> lis
     return record_list
 
 
+def _physical_git_worktree_root_get(path: Path, *, context: str) -> Path:
+    """Return the proven physical registered Git worktree containing one path.
+
+    Args:
+        path: Existing path inside the required worktree.
+        context: Diagnostic owner text.
+
+    Returns:
+        Exact physical registered worktree root.
+    """
+
+    repository_root = _git_repository_root_get(path, context=context)
+    if (
+        repository_root.is_symlink()
+        or not repository_root.is_dir()
+        or Path(os.path.abspath(repository_root)) != repository_root.resolve()
+    ):
+        raise SkillBehaviorEvalError(f"{context}: repository root is not one physical directory")
+    if (
+        _git_output_get(
+            repository_root,
+            ["rev-parse", "--is-inside-work-tree"],
+            context=f"{context}: cannot prove Git worktree state",
+        ).strip()
+        != "true"
+    ):
+        raise SkillBehaviorEvalError(f"{context}: repository root is not one Git worktree")
+    git_directory = Path(
+        _git_output_get(
+            repository_root,
+            ["rev-parse", "--absolute-git-dir"],
+            context=f"{context}: cannot identify Git administration directory",
+        ).strip()
+    )
+    common_directory = _git_common_directory_get(
+        repository_root,
+        context=f"{context}: cannot identify Git owner",
+    )
+    for directory, label in ((git_directory, "administration"), (common_directory, "common administration")):
+        try:
+            resolved_directory = directory.resolve(strict=True)
+        except OSError as error:
+            raise SkillBehaviorEvalError(f"{context}: Git {label} directory is unavailable") from error
+        if (
+            directory.is_symlink()
+            or not resolved_directory.is_dir()
+            or Path(os.path.abspath(directory)) != resolved_directory
+        ):
+            raise SkillBehaviorEvalError(f"{context}: Git {label} directory is not physical")
+    return repository_root
+
+
 def _working_directory_resolve(
     resolved_corpus_path: Path,
     working_directory_value: str,
@@ -938,15 +989,14 @@ def _working_directory_resolve(
 
     raw_direct_candidate = resolved_corpus_path.parent / working_directory_value
     direct_candidate = raw_direct_candidate.resolve()
+    source_repository_root = _physical_git_worktree_root_get(
+        resolved_corpus_path.parent,
+        context=f"{context}: cannot identify the corpus worktree",
+    )
     try:
-        source_repository_root = _git_repository_root_get(
-            resolved_corpus_path.parent,
-            context=f"{context}: cannot identify the corpus repository",
-        )
-    except SkillBehaviorEvalError:
-        if direct_candidate.is_dir():
-            return direct_candidate
-        raise
+        resolved_corpus_path.relative_to(source_repository_root)
+    except ValueError as exc:
+        raise SkillBehaviorEvalError(f"{context}: corpus path escapes its physical Git worktree") from exc
     source_branch_ref = _git_output_get(
         source_repository_root,
         ["symbolic-ref", "--quiet", "HEAD"],
@@ -955,10 +1005,14 @@ def _working_directory_resolve(
     if not source_branch_ref.startswith("refs/heads/"):
         raise SkillBehaviorEvalError(f"{context}: corpus worktree has no local branch identity")
     if direct_candidate.is_dir() and mode == "same-branch":
-        direct_repository_root = _git_repository_root_get(
+        direct_repository_root = _physical_git_worktree_root_get(
             direct_candidate,
-            context=f"{context}: direct target is not inside a Git worktree",
+            context=f"{context}: direct target is not inside a physical Git worktree",
         )
+        try:
+            direct_candidate.relative_to(direct_repository_root)
+        except ValueError as exc:
+            raise SkillBehaviorEvalError(f"{context}: direct target escapes its physical Git worktree") from exc
         direct_branch_ref = _git_output_get(
             direct_repository_root,
             ["symbolic-ref", "--quiet", "HEAD"],
@@ -1003,9 +1057,9 @@ def _working_directory_resolve(
         raise SkillBehaviorEvalError(
             f"{context}: not a directory in either the current or primary layout: {direct_candidate}"
         )
-    target_primary_root = _git_repository_root_get(
+    target_primary_root = _physical_git_worktree_root_get(
         primary_candidate,
-        context=f"{context}: target directory is not inside a Git repository",
+        context=f"{context}: target directory is not inside a physical Git worktree",
     )
     try:
         target_relative_path = primary_candidate.relative_to(target_primary_root)
@@ -1101,7 +1155,10 @@ def _corpus_case_list_load(
         All case contracts with runtime roots resolved only for selected cases.
     """
 
-    resolved_corpus_path = corpus_path.expanduser().resolve()
+    raw_corpus_path = corpus_path.expanduser()
+    resolved_corpus_path = raw_corpus_path.resolve()
+    if Path(os.path.abspath(raw_corpus_path)) != resolved_corpus_path or raw_corpus_path.is_symlink():
+        raise SkillBehaviorEvalError(f"behavior corpus must be one physical path: {raw_corpus_path}")
     try:
         payload = _json_duplicate_rejecting_load(
             resolved_corpus_path.read_text(encoding="utf-8"),
@@ -1399,8 +1456,7 @@ def _codex_payload_get(
                 check=False,
                 capture_output=True,
                 env=environment_by_name_map,
-                input=prompt,
-                text=True,
+                input=prompt.encode("utf-8"),
             )
         except OSError as error:
             raise ModelInvocationError(
@@ -1412,10 +1468,34 @@ def _codex_payload_get(
             ) from error
         usage: CodexUsage | None = None
         usage_error: SkillBehaviorEvalError | None = None
-        try:
-            usage = _codex_usage_get(completed_process.stdout)
-        except SkillBehaviorEvalError as error:
-            usage_error = error
+        stdout_text: str | None = None
+        if isinstance(completed_process.stdout, bytes):
+            try:
+                stdout_text = completed_process.stdout.decode("utf-8")
+            except UnicodeDecodeError as error:
+                usage_error = SkillBehaviorEvalError("Codex structured stdout is not valid UTF-8")
+                usage_error.__cause__ = error
+        else:
+            usage_error = SkillBehaviorEvalError("Codex structured stdout is not bytes")
+        if stdout_text is not None:
+            try:
+                usage = _codex_usage_get(stdout_text)
+            except SkillBehaviorEvalError as error:
+                usage_error = error
+        stderr_invalid = not isinstance(completed_process.stderr, bytes)
+        if not stderr_invalid:
+            try:
+                completed_process.stderr.decode("utf-8")
+            except UnicodeDecodeError:
+                stderr_invalid = True
+        if stderr_invalid:
+            raise ModelInvocationError(
+                ModelInvocationFailure(
+                    error_code="codex-output-invalid",
+                    error_message=_CASE_FAILURE_MESSAGE_BY_CODE_MAP["codex-output-invalid"],
+                    usage=usage,
+                )
+            )
         if completed_process.returncode != 0:
             raise ModelInvocationError(
                 ModelInvocationFailure(
@@ -2160,13 +2240,10 @@ def _project_local_skill_path_get(case: SkillBehaviorCase, skill_name: str) -> P
         Physical project-local SKILL.md path, or None when absent.
     """
 
-    try:
-        project_root = _git_repository_root_get(
-            case.working_directory,
-            context=f"{case.suite}:{case.id}: cannot identify project-local skill owner",
-        )
-    except SkillBehaviorEvalError:
-        project_root = case.working_directory.resolve()
+    project_root = _physical_git_worktree_root_get(
+        case.working_directory,
+        context=f"{case.suite}:{case.id}: cannot identify project-local skill owner",
+    )
     return _skill_path_resolve(
         project_root,
         Path(".agents/skills") / skill_name / "SKILL.md",
@@ -2368,13 +2445,8 @@ def _case_list_evaluate(
                     id=case.id,
                     suite=case.suite,
                 )
-                print(
-                    f"ERROR {failure.suite}:{failure.id}: {failure.error_code}: {failure.error_message}",
-                    flush=True,
-                )
                 attempt_by_index_map[index] = SkillBehaviorCaseAttempt(failure=failure, result=None)
                 continue
-            print(f"RUN {case.suite}:{case.id}", flush=True)
             try:
                 future = executor.submit(
                     _case_evaluate,
@@ -2391,10 +2463,6 @@ def _case_list_evaluate(
                     id=case.id,
                     suite=case.suite,
                 )
-                print(
-                    f"ERROR {failure.suite}:{failure.id}: {failure.error_code}: {failure.error_message}",
-                    flush=True,
-                )
                 attempt_by_index_map[index] = SkillBehaviorCaseAttempt(failure=failure, result=None)
                 submission_stopped = True
                 continue
@@ -2406,10 +2474,6 @@ def _case_list_evaluate(
                 result = future.result()
             except SkillBehaviorCaseEvaluationError as error:
                 failure = error.failure
-                print(
-                    f"ERROR {failure.suite}:{failure.id}: {failure.error_code}: {failure.error_message}",
-                    flush=True,
-                )
                 attempt_by_index_map[index] = SkillBehaviorCaseAttempt(failure=failure, result=None)
             except Exception:
                 failure = SkillBehaviorCaseFailure(
@@ -2420,17 +2484,25 @@ def _case_list_evaluate(
                     id=case.id,
                     suite=case.suite,
                 )
+                attempt_by_index_map[index] = SkillBehaviorCaseAttempt(failure=failure, result=None)
+            else:
+                attempt_by_index_map[index] = SkillBehaviorCaseAttempt(failure=None, result=result)
+    evaluation_attempt = SkillBehaviorEvaluationAttempt(
+        case_attempt_list=tuple(attempt_by_index_map[index] for index in range(len(case_list)))
+    )
+    try:
+        for attempt in evaluation_attempt.case_attempt_list:
+            if attempt.failure is not None:
+                failure = attempt.failure
                 print(
                     f"ERROR {failure.suite}:{failure.id}: {failure.error_code}: {failure.error_message}",
                     flush=True,
                 )
-                attempt_by_index_map[index] = SkillBehaviorCaseAttempt(failure=failure, result=None)
-            else:
-                attempt_by_index_map[index] = SkillBehaviorCaseAttempt(failure=None, result=result)
-                _result_print(result)
-    return SkillBehaviorEvaluationAttempt(
-        case_attempt_list=tuple(attempt_by_index_map[index] for index in range(len(case_list)))
-    )
+            elif attempt.result is not None:
+                _result_print(attempt.result)
+    except OSError, ValueError:
+        pass
+    return evaluation_attempt
 
 
 def main(argv_list: Sequence[str] | None = None) -> int:
