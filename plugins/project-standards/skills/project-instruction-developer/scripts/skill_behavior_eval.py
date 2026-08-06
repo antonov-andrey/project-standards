@@ -891,6 +891,11 @@ def _judge_prompt_get(
     invariant_payload = [asdict(invariant) for invariant in case.semantic_invariant_list]
     return f"""Act as an independent semantic evaluator. Do not inspect files and do not improve the answer.
 
+This judge evaluates a read-only behavior simulation. The candidate must not perform file, Git, deployment, or
+external mutations. When an invariant describes a mutation from the real workflow, evaluate whether the response
+correctly commits to that action for a real run; do not require or reward performing it in this simulation. A
+response still fails when it omits, rejects, or changes the real workflow action rather than only deferring it here.
+
 Evaluate whether the candidate response satisfies each invariant in substance. Do not use keyword, substring,
 heading, or formatting checks. A claim passes only when the response's actual meaning meets the full invariant.
 Return exactly one result for every invariant id, in the given order.

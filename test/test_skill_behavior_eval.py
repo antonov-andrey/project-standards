@@ -109,6 +109,39 @@ def _repository_create(repository: Path) -> None:
     _git_run(repository, ["commit", "-m", "Initial test state"])
 
 
+def test_judge_prompt_evaluates_real_mutations_as_read_only_proposed_behavior(tmp_path: Path) -> None:
+    """The judge cannot demand mutations that the generation sandbox explicitly forbids."""
+
+    module = _module_load()
+    case = module.SkillBehaviorCase(
+        corpus_path=tmp_path / "corpus-v1.json",
+        expected_skill_list=("project-standards:project-foundation",),
+        forbidden_skill_list=(),
+        id="mutation-contract",
+        prompt="Atomically replace the validated destination.",
+        semantic_invariant_list=(
+            module.SemanticInvariant(
+                id="atomic-replacement",
+                text="The response writes one atomic complete replacement.",
+            ),
+        ),
+        suite="provider",
+        working_directory=tmp_path,
+    )
+
+    prompt = module._judge_prompt_get(
+        case=case,
+        generation_payload={
+            "activated_skill_list": ["project-standards:project-foundation"],
+            "response": "In a real run I would write one atomic complete replacement, but this evaluation is read-only.",
+        },
+    )
+
+    assert "read-only behavior simulation" in prompt
+    assert "correctly commits to that action for a real run" in prompt
+    assert "do not require or reward performing it in this simulation" in prompt
+
+
 def _separate_git_directory_repository_create(repository: Path, git_directory: Path) -> None:
     """Create one main worktree whose Git administration lives elsewhere.
 
