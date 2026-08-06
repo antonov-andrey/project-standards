@@ -6,6 +6,7 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -1095,6 +1096,29 @@ def test_corpus_load_rejects_symbolic_owner_path(tmp_path: Path) -> None:
         module._corpus_case_list_load(symbolic_repository / "skill_behavior_eval/corpus-v1.json")
 
 
+def test_corpus_load_rejects_unrepaired_copied_linked_worktree(tmp_path: Path) -> None:
+    """A copied linked worktree cannot become the physical corpus owner.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    repository = tmp_path / "repository"
+    _repository_create(repository)
+    linked_worktree = tmp_path / "linked-worktree"
+    _git_run(repository, ["worktree", "add", "-b", "feature", str(linked_worktree), "HEAD"])
+    corpus_root = linked_worktree / "skill_behavior_eval"
+    corpus_root.mkdir()
+    corpus_path = corpus_root / "corpus-v1.json"
+    _corpus_write(corpus_path)
+    copied_worktree = tmp_path / "copied-worktree"
+    shutil.copytree(linked_worktree, copied_worktree)
+
+    with pytest.raises(module.SkillBehaviorEvalError, match="exactly one registered worktree"):
+        module._corpus_case_list_load(copied_worktree / "skill_behavior_eval/corpus-v1.json")
+
+
 def test_case_selection_does_not_resolve_unselected_runtime_root(
     tmp_path: Path,
 ) -> None:
@@ -1195,8 +1219,8 @@ def test_git_discovery_ignores_inherited_repository_redirection(
     assert _git_run(sentinel_repository, ["status", "--short"]) == ""
 
 
-def test_corpus_load_supports_a_separate_primary_git_directory(tmp_path: Path) -> None:
-    """Primary-worktree discovery must not assume a physical root `.git` directory.
+def test_corpus_load_rejects_an_unregistered_separate_primary_git_directory(tmp_path: Path) -> None:
+    """A separate Git directory cannot substitute for one registered worktree root.
 
     Args:
         tmp_path: Temporary directory path.
@@ -1211,11 +1235,31 @@ def test_corpus_load_supports_a_separate_primary_git_directory(tmp_path: Path) -
     corpus_path = corpus_root / "corpus-v1.json"
     _corpus_write(corpus_path)
 
-    case_list = module._corpus_case_list_load(corpus_path)
+    with pytest.raises(module.SkillBehaviorEvalError, match="exactly one registered worktree"):
+        module._corpus_case_list_load(corpus_path)
 
-    assert case_list[0].working_directory == repository
-    assert (repository / ".git").is_file()
-    assert git_directory.is_dir()
+
+def test_corpus_load_rejects_invalid_linked_worktree_administration_back_reference(tmp_path: Path) -> None:
+    """One linked worktree requires its Git administration to point back to its `.git` file.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    repository = tmp_path / "repository"
+    _repository_create(repository)
+    linked_worktree = tmp_path / "linked-worktree"
+    _git_run(repository, ["worktree", "add", "-b", "feature", str(linked_worktree), "HEAD"])
+    corpus_root = linked_worktree / "skill_behavior_eval"
+    corpus_root.mkdir()
+    corpus_path = corpus_root / "corpus-v1.json"
+    _corpus_write(corpus_path)
+    administration_directory = Path(_git_run(linked_worktree, ["rev-parse", "--absolute-git-dir"]))
+    (administration_directory / "gitdir").write_text(str(tmp_path / "foreign/.git"), encoding="utf-8")
+
+    with pytest.raises(module.SkillBehaviorEvalError, match="exactly one registered worktree"):
+        module._corpus_case_list_load(corpus_path)
 
 
 @pytest.mark.parametrize("direct_kind", ["directory", "symlink"])
@@ -1940,6 +1984,41 @@ def test_case_evaluate_accepts_physical_project_local_skill(tmp_path: Path) -> N
 
     assert result.passed is True
     assert result.activated_skill_list == ("local-review",)
+
+
+def test_project_local_skill_rejects_unrepaired_moved_linked_worktree(tmp_path: Path) -> None:
+    """A moved linked worktree cannot become a project-local skill owner.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    repository = tmp_path / "repository"
+    _repository_create(repository)
+    linked_worktree = tmp_path / "linked-worktree"
+    _git_run(repository, ["worktree", "add", "-b", "feature", str(linked_worktree), "HEAD"])
+    local_skill_path = linked_worktree / ".agents/skills/local-review/SKILL.md"
+    local_skill_path.parent.mkdir(parents=True)
+    local_skill_path.write_text(
+        "---\nname: local-review\ndescription: Deterministic local test skill.\n---\n",
+        encoding="utf-8",
+    )
+    moved_worktree = tmp_path / "moved-worktree"
+    linked_worktree.rename(moved_worktree)
+    case = module.SkillBehaviorCase(
+        corpus_path=moved_worktree / "skill_behavior_eval/corpus-v1.json",
+        expected_skill_list=("local-review",),
+        forbidden_skill_list=(),
+        id="case-a",
+        prompt="Review one Python function.",
+        semantic_invariant_list=(module.SemanticInvariant(id="bounded", text="The response remains read-only."),),
+        suite="provider",
+        working_directory=moved_worktree,
+    )
+
+    with pytest.raises(module.SkillBehaviorEvalError, match="exactly one registered worktree"):
+        module._project_local_skill_path_get(case, "local-review")
 
 
 def test_case_evaluate_rejects_provider_and_project_local_collision(tmp_path: Path) -> None:

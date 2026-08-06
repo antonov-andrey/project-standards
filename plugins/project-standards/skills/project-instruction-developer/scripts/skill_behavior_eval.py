@@ -850,7 +850,7 @@ def _registered_worktree_root_validate(
     if absolute_worktree_path != resolved_worktree_root:
         raise SkillBehaviorEvalError(f"{context}: registered worktree path traverses a symbolic link: {worktree_path}")
     if (
-        _git_repository_root_get(
+        _physical_git_worktree_root_get(
             resolved_worktree_root,
             context=f"{context}: cannot re-prove registered worktree root",
         )
@@ -960,6 +960,47 @@ def _physical_git_worktree_root_get(path: Path, *, context: str) -> Path:
             or Path(os.path.abspath(directory)) != resolved_directory
         ):
             raise SkillBehaviorEvalError(f"{context}: Git {label} directory is not physical")
+    matching_worktree_record_list = [
+        record
+        for record in _git_worktree_record_list_get(
+            repository_root,
+            context=f"{context}: cannot inspect Git worktree registration",
+        )
+        if Path(os.path.abspath(record["worktree"])) == repository_root
+    ]
+    if len(matching_worktree_record_list) != 1:
+        raise SkillBehaviorEvalError(f"{context}: repository root does not match exactly one registered worktree")
+    worktree_git_path = repository_root / ".git"
+    if worktree_git_path.is_file() and not worktree_git_path.is_symlink():
+        try:
+            git_directory_text = worktree_git_path.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError) as error:
+            raise SkillBehaviorEvalError(f"{context}: Git administration reference is unavailable") from error
+        prefix = "gitdir: "
+        if not git_directory_text.startswith(prefix):
+            raise SkillBehaviorEvalError(f"{context}: Git administration reference is invalid")
+        referenced_git_directory = Path(git_directory_text.removeprefix(prefix))
+        if not referenced_git_directory.is_absolute():
+            referenced_git_directory = repository_root / referenced_git_directory
+        if referenced_git_directory.resolve() != git_directory:
+            raise SkillBehaviorEvalError(f"{context}: Git administration reference is inconsistent")
+    elif worktree_git_path.resolve() != git_directory or git_directory != common_directory:
+        raise SkillBehaviorEvalError(f"{context}: Git administration reference is inconsistent")
+    if git_directory != common_directory:
+        administration_back_reference_path = git_directory / "gitdir"
+        try:
+            administration_back_reference_text = administration_back_reference_path.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError) as error:
+            raise SkillBehaviorEvalError(f"{context}: Git administration back-reference is unavailable") from error
+        administration_back_reference = Path(administration_back_reference_text)
+        if not administration_back_reference.is_absolute():
+            administration_back_reference = git_directory / administration_back_reference
+        if (
+            administration_back_reference_path.is_symlink()
+            or administration_back_reference_path.stat().st_nlink != 1
+            or administration_back_reference.resolve() != worktree_git_path
+        ):
+            raise SkillBehaviorEvalError(f"{context}: Git administration back-reference is inconsistent")
     return repository_root
 
 
