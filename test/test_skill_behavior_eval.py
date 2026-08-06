@@ -92,9 +92,7 @@ def _acceptance_result_payload(
                 "forbidden_activated_skill_list": [],
                 "suite": case_id.split(":", maxsplit=1)[0],
                 "id": case_id.split(":", maxsplit=1)[1],
-                "missing_expected_skill_list": (
-                    ["provider:required-skill"] if case_id in failed_case_id_set else []
-                ),
+                "missing_expected_skill_list": (["provider:required-skill"] if case_id in failed_case_id_set else []),
                 "passed": case_id not in failed_case_id_set,
                 "response": "deterministic fixture response",
                 "semantic_invariant_result_list": [
@@ -559,9 +557,7 @@ def test_runner_rejects_existing_output_before_reading_corpus(tmp_path: Path) ->
     output_path = tmp_path / "result.json"
     output_path.write_text("immutable\n", encoding="utf-8")
 
-    return_code = module.main(
-        ["--corpus", str(tmp_path / "missing.json"), "--output", str(output_path)]
-    )
+    return_code = module.main(["--corpus", str(tmp_path / "missing.json"), "--output", str(output_path)])
 
     assert return_code == 2
     assert output_path.read_text(encoding="utf-8") == "immutable\n"
@@ -598,9 +594,7 @@ def _corpus_write(
                             else expected_skill_list
                         ),
                         "forbidden_skill_list": (
-                            ["agent-workflows:code-audit"]
-                            if forbidden_skill_list is None
-                            else forbidden_skill_list
+                            ["agent-workflows:code-audit"] if forbidden_skill_list is None else forbidden_skill_list
                         ),
                         "semantic_invariant_list": [
                             {
@@ -614,6 +608,62 @@ def _corpus_write(
         ),
         encoding="utf-8",
     )
+
+
+def _plugin_source_path_create(
+    root: Path,
+    plugin_name: str,
+    skill_name_list: list[str],
+) -> Path:
+    """Create one physical plugin source with canonical skill owners.
+
+    Args:
+        root: Exact provider source root.
+        plugin_name: Plugin provider identity.
+        skill_name_list: Canonical skill identities.
+
+    Returns:
+        Exact physical provider source root.
+    """
+
+    manifest_path = root / ".codex-plugin/plugin.json"
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text(
+        json.dumps({"name": plugin_name, "version": "0.1.0+codex.test"}) + "\n",
+        encoding="utf-8",
+    )
+    for skill_name in skill_name_list:
+        skill_path = root / f"skills/{skill_name}/SKILL.md"
+        skill_path.parent.mkdir(parents=True)
+        skill_path.write_text(
+            f"---\nname: {skill_name}\ndescription: Deterministic test skill.\n---\n",
+            encoding="utf-8",
+        )
+    return root.resolve()
+
+
+def _plugin_source_path_by_name_map_create(
+    root: Path,
+    skill_name_list_by_plugin_name_map: dict[str, list[str]],
+) -> dict[str, Path]:
+    """Create exact physical source roots for each test provider.
+
+    Args:
+        root: Parent fixture directory.
+        skill_name_list_by_plugin_name_map: Skill identities by provider.
+
+    Returns:
+        Exact provider source root mapping.
+    """
+
+    return {
+        plugin_name: _plugin_source_path_create(
+            root / f"provider-{plugin_name}",
+            plugin_name,
+            skill_name_list,
+        )
+        for plugin_name, skill_name_list in skill_name_list_by_plugin_name_map.items()
+    }
 
 
 def _git_run(repository: Path, argument_list: list[str]) -> str:
@@ -1205,6 +1255,13 @@ def test_case_evaluate_combines_activation_and_independent_judge(
     corpus_path = corpus_root / "corpus-v1.json"
     _corpus_write(corpus_path)
     case = module._corpus_case_list_load(corpus_path)[0]
+    plugin_source_path_by_name_map = _plugin_source_path_by_name_map_create(
+        tmp_path,
+        {
+            "agent-workflows": ["code-audit"],
+            "project-standards": ["python-developer"],
+        },
+    )
     call_list: list[dict[str, Any]] = []
 
     def _model_call(
@@ -1261,10 +1318,7 @@ def test_case_evaluate_combines_activation_and_independent_judge(
             model="gpt-5.6-sol",
             reasoning_effort="medium",
         ),
-        plugin_selector_by_name_map={
-            "agent-workflows": "agent-workflows@agent-plugins",
-            "project-standards": "project-standards@project-standards",
-        },
+        plugin_source_path_by_name_map=plugin_source_path_by_name_map,
         model_call=_model_call,
     )
 
@@ -1291,6 +1345,13 @@ def test_case_evaluate_reports_missing_and_forbidden_activations(
     corpus_path = corpus_root / "corpus-v1.json"
     _corpus_write(corpus_path)
     case = module._corpus_case_list_load(corpus_path)[0]
+    plugin_source_path_by_name_map = _plugin_source_path_by_name_map_create(
+        tmp_path,
+        {
+            "agent-workflows": ["code-audit"],
+            "project-standards": ["python-developer"],
+        },
+    )
     payload_list = iter(
         [
             module.ModelInvocationResult(
@@ -1322,10 +1383,7 @@ def test_case_evaluate_reports_missing_and_forbidden_activations(
             model="gpt-5.6-sol",
             reasoning_effort="medium",
         ),
-        plugin_selector_by_name_map={
-            "agent-workflows": "agent-workflows@agent-plugins",
-            "project-standards": "project-standards@project-standards",
-        },
+        plugin_source_path_by_name_map=plugin_source_path_by_name_map,
         model_call=lambda *_args: next(payload_list),
     )
 
@@ -1334,8 +1392,8 @@ def test_case_evaluate_reports_missing_and_forbidden_activations(
     assert result.forbidden_activated_skill_list == ("agent-workflows:code-audit",)
 
 
-def test_case_evaluate_rejects_unbound_unexpected_activated_provider(tmp_path: Path) -> None:
-    """An unexpected activated provider must fail before semantic judging."""
+def test_case_evaluate_rejects_bare_ambient_activation(tmp_path: Path) -> None:
+    """A bare ambient-only activation must fail before semantic judging."""
 
     module = _module_load()
     corpus_path = tmp_path / "skill_behavior_eval/corpus-v1.json"
@@ -1349,13 +1407,13 @@ def test_case_evaluate_rejects_unbound_unexpected_activated_provider(tmp_path: P
         call_count += 1
         return module.ModelInvocationResult(
             payload={
-                "activated_skill_list": ["workflow-container-agent-tools:workflow-container-developer"],
+                "activated_skill_list": ["ambient-skill"],
                 "response": "Read-only response.",
             },
             usage=module.CodexUsage(**_codex_usage_payload()),
         )
 
-    with pytest.raises(module.SkillBehaviorEvalError, match="workflow-container-agent-tools"):
+    with pytest.raises(module.SkillBehaviorEvalError, match="ambient-skill"):
         module._case_evaluate(
             case,
             invocation_config=module.ModelInvocationConfig(
@@ -1363,9 +1421,49 @@ def test_case_evaluate_rejects_unbound_unexpected_activated_provider(tmp_path: P
                 model="gpt-5.6-sol",
                 reasoning_effort="medium",
             ),
-            plugin_selector_by_name_map={
-                "project-standards": "project-standards@project-standards"
+            plugin_source_path_by_name_map=_plugin_source_path_by_name_map_create(
+                tmp_path,
+                {"project-standards": []},
+            ),
+            model_call=_model_call,
+        )
+
+    assert call_count == 1
+
+
+def test_case_evaluate_rejects_nonexistent_qualified_skill(tmp_path: Path) -> None:
+    """A qualified activation must name a physical skill in its bound provider."""
+
+    module = _module_load()
+    corpus_path = tmp_path / "skill_behavior_eval/corpus-v1.json"
+    corpus_path.parent.mkdir()
+    _corpus_write(corpus_path, expected_skill_list=[], forbidden_skill_list=[])
+    case = module._corpus_case_list_load(corpus_path)[0]
+    call_count = 0
+
+    def _model_call(*_args: Any) -> Any:
+        nonlocal call_count
+        call_count += 1
+        return module.ModelInvocationResult(
+            payload={
+                "activated_skill_list": ["project-standards:missing-skill"],
+                "response": "Read-only response.",
             },
+            usage=module.CodexUsage(**_codex_usage_payload()),
+        )
+
+    with pytest.raises(module.SkillBehaviorEvalError, match="absent from its exact bound provider"):
+        module._case_evaluate(
+            case,
+            invocation_config=module.ModelInvocationConfig(
+                codex_bin="codex",
+                model="gpt-5.6-sol",
+                reasoning_effort="medium",
+            ),
+            plugin_source_path_by_name_map=_plugin_source_path_by_name_map_create(
+                tmp_path,
+                {"project-standards": []},
+            ),
             model_call=_model_call,
         )
 
@@ -1391,9 +1489,60 @@ def test_case_evaluate_accepts_exact_activated_provider_binding(tmp_path: Path) 
             ),
             module.ModelInvocationResult(
                 payload={
-                    "invariant_result_list": [
-                        {"id": "bounded", "passed": True, "reason": "The response is read-only."}
-                    ]
+                    "invariant_result_list": [{"id": "bounded", "passed": True, "reason": "The response is read-only."}]
+                },
+                usage=module.CodexUsage(**_codex_usage_payload()),
+            ),
+        ]
+    )
+
+    plugin_source_path_by_name_map = _plugin_source_path_by_name_map_create(
+        tmp_path,
+        {"workflow-container-agent-tools": ["workflow-container-developer"]},
+    )
+
+    result = module._case_evaluate(
+        case,
+        invocation_config=module.ModelInvocationConfig(
+            codex_bin="codex",
+            model="gpt-5.6-sol",
+            reasoning_effort="medium",
+        ),
+        plugin_source_path_by_name_map=plugin_source_path_by_name_map,
+        model_call=lambda *_args: next(payload_list),
+    )
+
+    assert result.passed is True
+    assert result.activated_skill_list == ("workflow-container-agent-tools:workflow-container-developer",)
+
+
+def test_case_evaluate_accepts_physical_project_local_skill(tmp_path: Path) -> None:
+    """One bare project-local activation resolves to its physical canonical owner."""
+
+    module = _module_load()
+    corpus_path = tmp_path / "skill_behavior_eval/corpus-v1.json"
+    corpus_path.parent.mkdir()
+    _corpus_write(
+        corpus_path,
+        expected_skill_list=["local-review"],
+        forbidden_skill_list=[],
+    )
+    case = module._corpus_case_list_load(corpus_path)[0]
+    local_skill_path = case.working_directory / ".agents/skills/local-review/SKILL.md"
+    local_skill_path.parent.mkdir(parents=True)
+    local_skill_path.write_text(
+        "---\nname: local-review\ndescription: Deterministic local test skill.\n---\n",
+        encoding="utf-8",
+    )
+    payload_list = iter(
+        [
+            module.ModelInvocationResult(
+                payload={"activated_skill_list": ["local-review"], "response": "Read-only response."},
+                usage=module.CodexUsage(**_codex_usage_payload()),
+            ),
+            module.ModelInvocationResult(
+                payload={
+                    "invariant_result_list": [{"id": "bounded", "passed": True, "reason": "The response is read-only."}]
                 },
                 usage=module.CodexUsage(**_codex_usage_payload()),
             ),
@@ -1407,18 +1556,58 @@ def test_case_evaluate_accepts_exact_activated_provider_binding(tmp_path: Path) 
             model="gpt-5.6-sol",
             reasoning_effort="medium",
         ),
-        plugin_selector_by_name_map={
-            "workflow-container-agent-tools": (
-                "workflow-container-agent-tools@agent-plugins"
-            )
-        },
+        plugin_source_path_by_name_map={},
         model_call=lambda *_args: next(payload_list),
     )
 
     assert result.passed is True
-    assert result.activated_skill_list == (
-        "workflow-container-agent-tools:workflow-container-developer",
+    assert result.activated_skill_list == ("local-review",)
+
+
+def test_case_evaluate_rejects_provider_and_project_local_collision(tmp_path: Path) -> None:
+    """One bare activation cannot collide across a declared provider and project owner."""
+
+    module = _module_load()
+    corpus_path = tmp_path / "skill_behavior_eval/corpus-v1.json"
+    corpus_path.parent.mkdir()
+    _corpus_write(
+        corpus_path,
+        expected_skill_list=["provider-a:shared"],
+        forbidden_skill_list=[],
     )
+    case = module._corpus_case_list_load(corpus_path)[0]
+    local_skill_path = case.working_directory / ".agents/skills/shared/SKILL.md"
+    local_skill_path.parent.mkdir(parents=True)
+    local_skill_path.write_text(
+        "---\nname: shared\ndescription: Deterministic local test skill.\n---\n",
+        encoding="utf-8",
+    )
+    call_count = 0
+
+    def _model_call(*_args: Any) -> Any:
+        nonlocal call_count
+        call_count += 1
+        return module.ModelInvocationResult(
+            payload={"activated_skill_list": ["shared"], "response": "Read-only response."},
+            usage=module.CodexUsage(**_codex_usage_payload()),
+        )
+
+    with pytest.raises(module.SkillBehaviorEvalError, match="ambiguous source identity"):
+        module._case_evaluate(
+            case,
+            invocation_config=module.ModelInvocationConfig(
+                codex_bin="codex",
+                model="gpt-5.6-sol",
+                reasoning_effort="medium",
+            ),
+            plugin_source_path_by_name_map=_plugin_source_path_by_name_map_create(
+                tmp_path,
+                {"provider-a": ["shared"]},
+            ),
+            model_call=_model_call,
+        )
+
+    assert call_count == 1
 
 
 def test_case_evaluate_accepts_no_activation_with_no_required_provider(tmp_path: Path) -> None:
@@ -1437,9 +1626,7 @@ def test_case_evaluate_accepts_no_activation_with_no_required_provider(tmp_path:
             ),
             module.ModelInvocationResult(
                 payload={
-                    "invariant_result_list": [
-                        {"id": "bounded", "passed": True, "reason": "The response is read-only."}
-                    ]
+                    "invariant_result_list": [{"id": "bounded", "passed": True, "reason": "The response is read-only."}]
                 },
                 usage=module.CodexUsage(**_codex_usage_payload()),
             ),
@@ -1453,9 +1640,10 @@ def test_case_evaluate_accepts_no_activation_with_no_required_provider(tmp_path:
             model="gpt-5.6-sol",
             reasoning_effort="medium",
         ),
-        plugin_selector_by_name_map={
-            "project-standards": "project-standards@project-standards"
-        },
+        plugin_source_path_by_name_map=_plugin_source_path_by_name_map_create(
+            tmp_path,
+            {"project-standards": []},
+        ),
         model_call=lambda *_args: next(payload_list),
     )
 
@@ -1479,9 +1667,15 @@ def test_activation_normalization_requires_one_unambiguous_provider_identity(
     _corpus_write(corpus_path)
     case = module._corpus_case_list_load(corpus_path)[0]
 
-    assert module._activated_skill_tuple_normalize(["python-developer"], case=case) == (
-        "project-standards:python-developer",
+    plugin_source_path_by_name_map = _plugin_source_path_by_name_map_create(
+        tmp_path,
+        {"project-standards": ["python-developer"]},
     )
+    assert module._activated_skill_tuple_resolve(
+        ["python-developer"],
+        case=case,
+        plugin_source_path_by_name_map=plugin_source_path_by_name_map,
+    ) == ("project-standards:python-developer",)
 
     ambiguous_case = module.SkillBehaviorCase(
         corpus_path=case.corpus_path,
@@ -1493,8 +1687,16 @@ def test_activation_normalization_requires_one_unambiguous_provider_identity(
         suite=case.suite,
         working_directory=case.working_directory,
     )
-    with pytest.raises(module.SkillBehaviorEvalError, match="ambiguous provider identity"):
-        module._activated_skill_tuple_normalize(["shared"], case=ambiguous_case)
+    ambiguous_plugin_source_path_by_name_map = _plugin_source_path_by_name_map_create(
+        tmp_path,
+        {"provider-a": ["shared"], "provider-b": ["shared"]},
+    )
+    with pytest.raises(module.SkillBehaviorEvalError, match="ambiguous source identity"):
+        module._activated_skill_tuple_resolve(
+            ["shared"],
+            case=ambiguous_case,
+            plugin_source_path_by_name_map=ambiguous_plugin_source_path_by_name_map,
+        )
 
 
 def test_case_list_evaluate_preserves_corpus_order(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -1526,7 +1728,7 @@ def test_case_list_evaluate_preserves_corpus_order(monkeypatch: pytest.MonkeyPat
         case: Any,
         *,
         invocation_config: Any,
-        plugin_selector_by_name_map: dict[str, str],
+        plugin_source_path_by_name_map: dict[str, Path],
     ) -> Any:
         """Return the second case first.
 
@@ -1562,10 +1764,13 @@ def test_case_list_evaluate_preserves_corpus_order(monkeypatch: pytest.MonkeyPat
             model="gpt-5.6-sol",
             reasoning_effort="medium",
         ),
-        plugin_selector_by_name_map={
-            "agent-workflows": "agent-workflows@agent-plugins",
-            "project-standards": "project-standards@project-standards",
-        },
+        plugin_source_path_by_name_map=_plugin_source_path_by_name_map_create(
+            tmp_path,
+            {
+                "agent-workflows": ["code-audit"],
+                "project-standards": ["python-developer"],
+            },
+        ),
     )
 
     assert [result.id for result in result_list] == ["case-a", "case-b"]
@@ -1606,11 +1811,20 @@ def _plugin_binding_fixture_create(
             encoding="utf-8",
         )
         (source_plugin_path / "SKILL.md").write_text("source\n", encoding="utf-8")
+        source_skill_path = source_plugin_path / "skills/python-developer/SKILL.md"
+        source_skill_path.parent.mkdir(parents=True)
+        source_skill_path.write_text(
+            "---\nname: python-developer\ndescription: Deterministic provider test skill.\n---\n",
+            encoding="utf-8",
+        )
         cache_plugin_path = standard_codex_home / f"plugins/cache/{marketplace_name}/{plugin_name}/{plugin_version}"
         cache_manifest_path = cache_plugin_path / ".codex-plugin/plugin.json"
         cache_manifest_path.parent.mkdir(parents=True)
         cache_manifest_path.write_bytes(source_manifest_path.read_bytes())
         (cache_plugin_path / "SKILL.md").write_text("source\n", encoding="utf-8")
+        cache_skill_path = cache_plugin_path / "skills/python-developer/SKILL.md"
+        cache_skill_path.parent.mkdir(parents=True)
+        cache_skill_path.write_bytes(source_skill_path.read_bytes())
     return marketplace_path, standard_codex_home
 
 
@@ -1760,15 +1974,15 @@ def test_preinstalled_plugin_binding_accepts_exact_server_cache(tmp_path: Path) 
         forbidden_skill_list=["project-standards:pytest-developer"],
     )
 
-    plugin_selector_by_name_map = module._preinstalled_plugin_source_binding_validate(
+    plugin_source_path_by_name_map = module._preinstalled_plugin_source_binding_validate(
         case_list=module._selected_case_list_get(case_id_list=[], corpus_path_list=[corpus_path]),
         marketplace_path_list=[marketplace_path],
         plugin_selector_list=["project-standards@provider-marketplace"],
         standard_codex_home=standard_codex_home,
     )
 
-    assert plugin_selector_by_name_map == {
-        "project-standards": "project-standards@provider-marketplace"
+    assert plugin_source_path_by_name_map == {
+        "project-standards": (marketplace_path / "plugins/project-standards").resolve()
     }
 
 
@@ -1932,7 +2146,7 @@ def test_plugin_selector_rejects_traversal_and_open_identities(selector: str) ->
         module._plugin_selector_tuple_normalize([selector])
 
 
-def test_activated_provider_binding_rejects_mismatched_and_ambiguous_sources() -> None:
+def test_activated_provider_binding_rejects_mismatched_and_ambiguous_sources(tmp_path: Path) -> None:
     """One activated provider must resolve to one matching declared selector."""
 
     module = _module_load()
@@ -1945,10 +2159,15 @@ def test_activated_provider_binding_rejects_mismatched_and_ambiguous_sources() -
             ]
         )
     with pytest.raises(module.SkillBehaviorEvalError, match="identity is mismatched"):
-        module._required_plugin_source_binding_validate(
-            [],
-            {"project-standards": "agent-workflows@agent-plugins"},
-            activated_skill_list=["project-standards:python-developer"],
+        module._qualified_activated_skill_resolve(
+            "project-standards:python-developer",
+            plugin_source_path_by_name_map={
+                "project-standards": _plugin_source_path_create(
+                    tmp_path / "mismatched-provider",
+                    "agent-workflows",
+                    ["python-developer"],
+                )
+            },
         )
 
 

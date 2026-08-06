@@ -11,12 +11,14 @@ import pwd
 import re
 import subprocess
 import tempfile
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 DEFAULT_MODEL = "gpt-5.6-sol"
 DEFAULT_REASONING_EFFORT = "max"
@@ -1149,7 +1151,7 @@ def _preinstalled_plugin_source_binding_validate(
     marketplace_path_list: Sequence[Path],
     plugin_selector_list: Sequence[str],
     standard_codex_home: Path,
-) -> dict[str, str]:
+) -> dict[str, Path]:
     """Require server-prepared plugins to equal the declared local sources.
 
     Args:
@@ -1159,7 +1161,7 @@ def _preinstalled_plugin_source_binding_validate(
         standard_codex_home: Current OS user's standard Codex home.
 
     Returns:
-        Exact validated source selector by provider.
+        Exact validated provider source root by provider.
     """
 
     if bool(marketplace_path_list) != bool(plugin_selector_list):
@@ -1259,6 +1261,7 @@ def _preinstalled_plugin_source_binding_validate(
             plugin_source_path_by_name_map[plugin_name] = plugin_source_path
         plugin_source_path_by_name_by_marketplace_name_map[normalized_marketplace_name] = plugin_source_path_by_name_map
 
+    plugin_source_path_by_name_map: dict[str, Path] = {}
     for plugin_selector in normalized_plugin_selector_list:
         plugin_name, marketplace_name = plugin_selector.split("@", 1)
         if marketplace_name not in plugin_source_path_by_name_by_marketplace_name_map:
@@ -1295,7 +1298,8 @@ def _preinstalled_plugin_source_binding_validate(
             plugin_source_path
         ) != _plugin_file_sha256_by_relative_path_map_get(cached_plugin_path):
             raise SkillBehaviorEvalError(f"server-prepared plugin differs from its declared source: {plugin_selector}")
-    return plugin_selector_by_name_map
+        plugin_source_path_by_name_map[plugin_name] = plugin_source_path
+    return plugin_source_path_by_name_map
 
 
 def _plugin_selector_tuple_normalize(
@@ -1336,7 +1340,7 @@ def _plugin_selector_by_name_map_get(plugin_selector_list: Sequence[str]) -> dic
 
 def _required_plugin_source_binding_validate(
     case_list: Sequence[SkillBehaviorCase],
-    plugin_selector_by_name_map: dict[str, str],
+    plugin_name_collection: Collection[str],
     *,
     activated_skill_list: Sequence[str] = (),
 ) -> None:
@@ -1344,14 +1348,10 @@ def _required_plugin_source_binding_validate(
 
     Args:
         case_list: Ordered case values.
-        plugin_selector_by_name_map: Exact validated source selector by provider.
+        plugin_name_collection: Providers with exact declared sources.
         activated_skill_list: Ordered normalized activated skill values.
     """
 
-    for plugin_name, plugin_selector in plugin_selector_by_name_map.items():
-        normalized_plugin_selector_list = _plugin_selector_tuple_normalize([plugin_selector])
-        if normalized_plugin_selector_list[0].split("@", 1)[0] != plugin_name:
-            raise SkillBehaviorEvalError(f"plugin provider source binding identity is mismatched: {plugin_name}")
     required_plugin_name_set = {
         skill_name.split(":", 1)[0]
         for case in case_list
@@ -1359,7 +1359,7 @@ def _required_plugin_source_binding_validate(
         if ":" in skill_name
     }
     required_plugin_name_set.update(_activated_plugin_name_set_get(activated_skill_list))
-    missing_plugin_name_list = sorted(required_plugin_name_set - set(plugin_selector_by_name_map))
+    missing_plugin_name_list = sorted(required_plugin_name_set - set(plugin_name_collection))
     if missing_plugin_name_list:
         raise SkillBehaviorEvalError(
             "source binding omits plugins required by selected cases or actual activation: "
@@ -1375,9 +1375,7 @@ def _activated_plugin_name_set_get(activated_skill_list: Sequence[str]) -> set[s
         if ":" not in activated_skill_name:
             continue
         if activated_skill_name.count(":") != 1:
-            raise SkillBehaviorEvalError(
-                f"activated skill has ambiguous provider identity: {activated_skill_name}"
-            )
+            raise SkillBehaviorEvalError(f"activated skill has ambiguous provider identity: {activated_skill_name}")
         plugin_name, skill_name = activated_skill_name.split(":", 1)
         _plugin_identity_validate(plugin_name, label="activated skill plugin name")
         _plugin_identity_validate(skill_name, label="activated skill name")
@@ -1488,7 +1486,7 @@ def _case_evaluate(
     case: SkillBehaviorCase,
     *,
     invocation_config: ModelInvocationConfig,
-    plugin_selector_by_name_map: dict[str, str],
+    plugin_source_path_by_name_map: dict[str, Path],
     model_call: ModelCall = _codex_payload_get,
 ) -> SkillBehaviorCaseResult:
     """Run generation and independent semantic judging for one case.
@@ -1496,7 +1494,7 @@ def _case_evaluate(
     Args:
         case: Case.
         invocation_config: Invocation config.
-        plugin_selector_by_name_map: Exact validated source selector by provider.
+        plugin_source_path_by_name_map: Exact validated provider source root by provider.
         model_call: Model call.
 
     Returns:
@@ -1513,13 +1511,14 @@ def _case_evaluate(
         generation_invocation.payload,
         case=case,
     )
-    activated_skill_list = _activated_skill_tuple_normalize(
+    activated_skill_list = _activated_skill_tuple_resolve(
         generation_payload["activated_skill_list"],
         case=case,
+        plugin_source_path_by_name_map=plugin_source_path_by_name_map,
     )
     _required_plugin_source_binding_validate(
         [case],
-        plugin_selector_by_name_map,
+        plugin_source_path_by_name_map,
         activated_skill_list=activated_skill_list,
     )
     judge_invocation = model_call(
@@ -1558,36 +1557,197 @@ def _case_evaluate(
     )
 
 
-def _activated_skill_tuple_normalize(
+def _plugin_source_path_validate(plugin_name: str, plugin_source_path: Path) -> Path:
+    """Require one physical source root whose manifest owns the provider identity.
+
+    Args:
+        plugin_name: Exact provider identity.
+        plugin_source_path: Bound source root.
+
+    Returns:
+        Physical resolved provider source root.
+    """
+
+    _plugin_identity_validate(plugin_name, label="activated skill plugin name")
+    try:
+        resolved_plugin_source_path = plugin_source_path.resolve(strict=True)
+    except OSError as exc:
+        raise SkillBehaviorEvalError(f"activated provider source is unavailable: {plugin_name}") from exc
+    if (
+        Path(os.path.abspath(plugin_source_path)) != resolved_plugin_source_path
+        or plugin_source_path.is_symlink()
+        or not resolved_plugin_source_path.is_dir()
+    ):
+        raise SkillBehaviorEvalError(f"activated provider source is not one physical directory: {plugin_name}")
+    plugin_manifest_path = resolved_plugin_source_path / ".codex-plugin/plugin.json"
+    try:
+        plugin_manifest = json.loads(plugin_manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise SkillBehaviorEvalError(f"activated provider source manifest is invalid: {plugin_name}") from exc
+    if not isinstance(plugin_manifest, dict) or plugin_manifest.get("name") != plugin_name:
+        raise SkillBehaviorEvalError(f"activated provider source identity is mismatched: {plugin_name}")
+    return resolved_plugin_source_path
+
+
+def _skill_path_resolve(
+    owner_root: Path,
+    relative_skill_path: Path,
+    *,
+    expected_skill_name: str,
+    context: str,
+) -> Path | None:
+    """Resolve one physical canonical SKILL.md and verify its declared identity.
+
+    Args:
+        owner_root: Exact physical provider or project owner root.
+        relative_skill_path: Canonical owner-relative SKILL.md path.
+        expected_skill_name: Exact unqualified skill identity.
+        context: Diagnostic owner text.
+
+    Returns:
+        Physical SKILL.md path, or None when the canonical path is absent.
+    """
+
+    raw_skill_path = owner_root / relative_skill_path
+    if not raw_skill_path.exists():
+        return None
+    try:
+        skill_path = raw_skill_path.resolve(strict=True)
+        skill_path.relative_to(owner_root)
+    except (OSError, ValueError) as exc:
+        raise SkillBehaviorEvalError(f"{context} skill path escapes its exact source: {raw_skill_path}") from exc
+    if Path(os.path.abspath(raw_skill_path)) != skill_path or raw_skill_path.is_symlink() or not skill_path.is_file():
+        raise SkillBehaviorEvalError(f"{context} skill must be one physical SKILL.md: {raw_skill_path}")
+    try:
+        skill_text = skill_path.read_text(encoding="utf-8")
+        frontmatter_marker, frontmatter_text, _body = skill_text.split("---", 2)
+        frontmatter = yaml.safe_load(frontmatter_text)
+    except (OSError, UnicodeDecodeError, ValueError, yaml.YAMLError) as exc:
+        raise SkillBehaviorEvalError(f"{context} SKILL.md frontmatter is invalid: {skill_path}") from exc
+    if frontmatter_marker or not isinstance(frontmatter, dict) or frontmatter.get("name") != expected_skill_name:
+        raise SkillBehaviorEvalError(f"{context} SKILL.md identity is mismatched: {skill_path}")
+    return skill_path
+
+
+def _qualified_activated_skill_resolve(
+    activated_skill_name: str,
+    *,
+    plugin_source_path_by_name_map: dict[str, Path],
+) -> str:
+    """Resolve one qualified activation to its exact bound provider SKILL.md.
+
+    Args:
+        activated_skill_name: Provider-qualified activation identity.
+        plugin_source_path_by_name_map: Exact validated provider source roots.
+
+    Returns:
+        The unchanged exact qualified activation identity.
+    """
+
+    if activated_skill_name.count(":") != 1:
+        raise SkillBehaviorEvalError(f"activated skill has ambiguous provider identity: {activated_skill_name}")
+    plugin_name, skill_name = activated_skill_name.split(":", 1)
+    _plugin_identity_validate(plugin_name, label="activated skill plugin name")
+    _plugin_identity_validate(skill_name, label="activated skill name")
+    if plugin_name not in plugin_source_path_by_name_map:
+        raise SkillBehaviorEvalError(f"activated skill has no exact bound provider source: {activated_skill_name}")
+    plugin_source_path = _plugin_source_path_validate(
+        plugin_name,
+        plugin_source_path_by_name_map[plugin_name],
+    )
+    if (
+        _skill_path_resolve(
+            plugin_source_path,
+            Path("skills") / skill_name / "SKILL.md",
+            expected_skill_name=skill_name,
+            context=f"activated provider {plugin_name}",
+        )
+        is None
+    ):
+        raise SkillBehaviorEvalError(
+            f"activated skill is absent from its exact bound provider source: {activated_skill_name}"
+        )
+    return activated_skill_name
+
+
+def _project_local_skill_path_get(case: SkillBehaviorCase, skill_name: str) -> Path | None:
+    """Return one physical project-local SKILL.md for the case working directory.
+
+    Args:
+        case: Case whose project owns the possible local skill.
+        skill_name: Exact unqualified skill identity.
+
+    Returns:
+        Physical project-local SKILL.md path, or None when absent.
+    """
+
+    try:
+        project_root = _git_repository_root_get(
+            case.working_directory,
+            context=f"{case.suite}:{case.id}: cannot identify project-local skill owner",
+        )
+    except SkillBehaviorEvalError:
+        project_root = case.working_directory.resolve()
+    return _skill_path_resolve(
+        project_root,
+        Path(".agents/skills") / skill_name / "SKILL.md",
+        expected_skill_name=skill_name,
+        context="project-local activated",
+    )
+
+
+def _activated_skill_tuple_resolve(
     activated_skill_list: Sequence[str],
     *,
     case: SkillBehaviorCase,
+    plugin_source_path_by_name_map: dict[str, Path],
 ) -> tuple[str, ...]:
-    """Canonicalize an unqualified report only when the case makes its provider identity unambiguous.
+    """Resolve every activation to one exact provider or project-local SKILL.md.
 
     Args:
         activated_skill_list: Ordered activated skill values.
         case: Case.
+        plugin_source_path_by_name_map: Exact validated provider source roots.
 
     Returns:
         Values in deterministic immutable order.
     """
 
     canonical_skill_name_set = set(case.expected_skill_list) | set(case.forbidden_skill_list)
-    canonical_skill_name_list_by_suffix_map: dict[str, list[str]] = {}
-    for canonical_skill_name in canonical_skill_name_set:
-        skill_suffix = canonical_skill_name.rsplit(":", maxsplit=1)[-1]
-        canonical_skill_name_list_by_suffix_map.setdefault(skill_suffix, []).append(canonical_skill_name)
 
     normalized_skill_list: list[str] = []
     for activated_skill_name in activated_skill_list:
-        candidate_list = canonical_skill_name_list_by_suffix_map.get(activated_skill_name, [])
-        if len(candidate_list) > 1:
-            raise SkillBehaviorEvalError(
-                f"{case.suite}:{case.id}.generation activated skill has ambiguous provider identity: "
-                f"{activated_skill_name}"
+        if ":" in activated_skill_name:
+            normalized_skill_name = _qualified_activated_skill_resolve(
+                activated_skill_name,
+                plugin_source_path_by_name_map=plugin_source_path_by_name_map,
             )
-        normalized_skill_name = candidate_list[0] if candidate_list else activated_skill_name
+        else:
+            _plugin_identity_validate(activated_skill_name, label="activated skill name")
+            candidate_list = [
+                canonical_skill_name
+                for canonical_skill_name in canonical_skill_name_set
+                if canonical_skill_name.count(":") == 1
+                and canonical_skill_name.rsplit(":", maxsplit=1)[-1] == activated_skill_name
+            ]
+            for candidate in candidate_list:
+                _qualified_activated_skill_resolve(
+                    candidate,
+                    plugin_source_path_by_name_map=plugin_source_path_by_name_map,
+                )
+            if _project_local_skill_path_get(case, activated_skill_name) is not None:
+                candidate_list.append(activated_skill_name)
+            if not candidate_list:
+                raise SkillBehaviorEvalError(
+                    f"{case.suite}:{case.id}.generation activated skill is absent from exact case sources: "
+                    f"{activated_skill_name}"
+                )
+            if len(candidate_list) > 1:
+                raise SkillBehaviorEvalError(
+                    f"{case.suite}:{case.id}.generation activated skill has ambiguous source identity: "
+                    f"{activated_skill_name}"
+                )
+            normalized_skill_name = candidate_list[0]
         if normalized_skill_name not in normalized_skill_list:
             normalized_skill_list.append(normalized_skill_name)
     return tuple(normalized_skill_list)
@@ -1701,7 +1861,7 @@ def _case_list_evaluate(
     *,
     concurrency: int,
     invocation_config: ModelInvocationConfig,
-    plugin_selector_by_name_map: dict[str, str],
+    plugin_source_path_by_name_map: dict[str, Path],
 ) -> list[SkillBehaviorCaseResult]:
     """Evaluate cases concurrently while preserving corpus order in the result.
 
@@ -1709,7 +1869,7 @@ def _case_list_evaluate(
         case_list: Ordered case values.
         concurrency: Concurrency.
         invocation_config: Invocation config.
-        plugin_selector_by_name_map: Exact validated source selector by provider.
+        plugin_source_path_by_name_map: Exact validated provider source root by provider.
 
     Returns:
         Requested values in deterministic order.
@@ -1724,7 +1884,7 @@ def _case_list_evaluate(
                 _case_evaluate,
                 case,
                 invocation_config=invocation_config,
-                plugin_selector_by_name_map=plugin_selector_by_name_map,
+                plugin_source_path_by_name_map=plugin_source_path_by_name_map,
             )
             future_by_index_map[future] = index
         for future in as_completed(future_by_index_map):
@@ -1757,7 +1917,7 @@ def main(argv_list: Sequence[str] | None = None) -> int:
                 print(f"{case.suite}:{case.id}")
             return 0
         standard_codex_home = Path(_standard_codex_process_environment_get()["HOME"]) / ".codex"
-        plugin_selector_by_name_map = _preinstalled_plugin_source_binding_validate(
+        plugin_source_path_by_name_map = _preinstalled_plugin_source_binding_validate(
             case_list=case_list,
             marketplace_path_list=args.plugin_marketplace_path_list,
             plugin_selector_list=args.plugin_selector_list,
@@ -1772,7 +1932,7 @@ def main(argv_list: Sequence[str] | None = None) -> int:
             case_list,
             concurrency=args.concurrency,
             invocation_config=invocation_config,
-            plugin_selector_by_name_map=plugin_selector_by_name_map,
+            plugin_source_path_by_name_map=plugin_source_path_by_name_map,
         )
         result_payload = _result_payload_get(
             invocation_config=invocation_config,
