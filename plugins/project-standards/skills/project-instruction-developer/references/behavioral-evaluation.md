@@ -28,6 +28,8 @@ Formally, `S0` is every selected case, `Sn+1 = failed(Sn)`, and the cycle succee
 
 ## Commands
 
-The initial runner command supplies every selected corpus, exact local plugin marketplace and plugin selector, `--model gpt-5.6-sol`, `--reasoning-effort max`, and one immutable `--output` path. Selection may be the complete corpus or explicit repeated `--case` arguments.
+Server bootstrap first installs every exact provider revision required by the selected cases in the current operating-system user's standard Codex home. The initial runner command then supplies every selected corpus, the same exact local plugin marketplace and plugin selector, `--model gpt-5.6-sol`, `--reasoning-effort max`, and one immutable `--output` path. The runner validates that every installed plugin cache is byte-for-byte equal to its declared source and does not install or isolate plugins itself. The standard home, native wait, resume, and exact usage boundaries are owned by `project-standards:project-foundation`, reference `Codex Process State`.
+
+Selection may be the complete corpus or explicit repeated `--case` arguments.
 
 After classifying and fixing every current failure, copy `next_case_argument_list` from the acceptance planner as direct repeated arguments to the same runner command and write a new immutable result path. Replay all result paths in order through the planner. Planner exit `1` means failures remain, exit `0` means the cycle converged, and exit `2` means the result sequence violates the contract.

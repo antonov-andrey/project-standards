@@ -4,11 +4,12 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import pwd
 import subprocess
 import tempfile
-from contextlib import ExitStack
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
@@ -92,7 +93,6 @@ class ModelInvocationConfig:
     codex_bin: str
     model: str
     reasoning_effort: str
-    codex_home: Path | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,8 +190,8 @@ def _argument_parser_get() -> argparse.ArgumentParser:
         default=[],
         type=Path,
         help=(
-            "Exact local plugin-marketplace root to install into an isolated Codex home; "
-            "repeat for multiple providers. Requires at least one --plugin."
+            "Exact local plugin-marketplace root whose selected sources must match the server-prepared "
+            "standard Codex home; repeat for multiple providers. Requires at least one --plugin."
         ),
     )
     parser.add_argument(
@@ -200,7 +200,7 @@ def _argument_parser_get() -> argparse.ArgumentParser:
         dest="plugin_selector_list",
         default=[],
         help=(
-            "Exact plugin selector NAME@MARKETPLACE to install for the evaluation; repeat as needed. "
+            "Exact plugin selector NAME@MARKETPLACE to verify before evaluation; repeat as needed. "
             "Requires at least one --plugin-marketplace."
         ),
     )
@@ -923,7 +923,7 @@ def _codex_payload_get(
         invocation_config: Invocation config.
 
     Returns:
-        Structured final response returned by the isolated Codex invocation.
+        Structured final response returned by the Codex invocation.
     """
 
     with tempfile.TemporaryDirectory(prefix="skill-behavior-eval-") as temporary_directory_value:
@@ -934,7 +934,6 @@ def _codex_payload_get(
         command = [
             invocation_config.codex_bin,
             "exec",
-            "--ephemeral",
             "--sandbox",
             "read-only",
             "--color",
@@ -951,9 +950,7 @@ def _codex_payload_get(
             str(output_path),
             "-",
         ]
-        environment_by_name_map = os.environ.copy()
-        if invocation_config.codex_home is not None:
-            environment_by_name_map["CODEX_HOME"] = str(invocation_config.codex_home)
+        environment_by_name_map = _standard_codex_process_environment_get()
         try:
             completed_process = subprocess.run(
                 command,
@@ -980,57 +977,58 @@ def _codex_payload_get(
     return payload
 
 
-def _checked_codex_command_run(
-    argument_list: Sequence[str],
+def _standard_codex_process_environment_get(
+    environment_by_name_map: dict[str, str] | None = None,
     *,
-    codex_bin: str,
-    codex_home: Path,
-    context: str,
-) -> None:
-    """Run one isolated Codex plugin-setup command.
+    os_user_home: Path | None = None,
+) -> dict[str, str]:
+    """Return the unchanged standard-home environment for one Codex process."""
 
-    Args:
-        argument_list: Exact command arguments.
-        codex_bin: Codex bin.
-        codex_home: Codex home.
-        context: Context.
-    """
-
-    environment_by_name_map = os.environ.copy()
-    environment_by_name_map["CODEX_HOME"] = str(codex_home)
+    environment = dict(os.environ if environment_by_name_map is None else environment_by_name_map)
+    user_home = Path(pwd.getpwuid(os.getuid()).pw_dir) if os_user_home is None else os_user_home
     try:
-        completed_process = subprocess.run(
-            [codex_bin, *argument_list],
-            check=False,
-            capture_output=True,
-            env=environment_by_name_map,
-            text=True,
-        )
+        resolved_user_home = user_home.resolve(strict=True)
     except OSError as exc:
-        raise SkillBehaviorEvalError(f"{context}: Codex command failed: {exc}") from exc
-    if completed_process.returncode != 0:
-        stderr_tail = completed_process.stderr[-4000:].strip()
-        stdout_tail = completed_process.stdout[-4000:].strip()
-        raise SkillBehaviorEvalError(
-            f"{context}: Codex exited with {completed_process.returncode}; "
-            f"stdout={stdout_tail!r}; stderr={stderr_tail!r}"
-        )
+        raise SkillBehaviorEvalError("the current OS user home is unavailable") from exc
+    if not resolved_user_home.is_dir() or str(resolved_user_home) != environment.get("HOME"):
+        raise SkillBehaviorEvalError("HOME must equal the current OS user home")
+    if "CODEX_HOME" in environment:
+        raise SkillBehaviorEvalError("CODEX_HOME must remain unset")
+    if not (resolved_user_home / ".codex").is_dir():
+        raise SkillBehaviorEvalError("server bootstrap must prepare the standard Codex home")
+    return environment
 
 
-def _isolated_codex_home_prepare(
-    codex_home: Path,
+def _plugin_file_sha256_by_relative_path_map_get(root: Path) -> dict[str, str]:
+    """Return one exact ordinary-file snapshot for a plugin tree."""
+
+    file_sha256_by_relative_path_map: dict[str, str] = {}
+    for path in sorted(root.rglob("*")):
+        if path.is_symlink():
+            raise SkillBehaviorEvalError(f"plugin tree contains a symbolic link: {path}")
+        if path.is_dir():
+            continue
+        if not path.is_file():
+            raise SkillBehaviorEvalError(f"plugin tree contains a non-file entry: {path}")
+        relative_path = path.relative_to(root).as_posix()
+        file_sha256_by_relative_path_map[relative_path] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return file_sha256_by_relative_path_map
+
+
+def _preinstalled_plugin_source_binding_validate(
     *,
-    codex_bin: str,
+    case_list: Sequence[SkillBehaviorCase],
     marketplace_path_list: Sequence[Path],
     plugin_selector_list: Sequence[str],
+    standard_codex_home: Path,
 ) -> None:
-    """Install exact worktree plugin sources into one ephemeral Codex home.
+    """Require server-prepared plugins to equal the declared local sources.
 
     Args:
-        codex_home: Codex home.
-        codex_bin: Codex bin.
+        case_list: Ordered selected behavior cases.
         marketplace_path_list: Ordered marketplace path values.
         plugin_selector_list: Ordered plugin selector values.
+        standard_codex_home: Current OS user's standard Codex home.
     """
 
     if bool(marketplace_path_list) != bool(plugin_selector_list):
@@ -1041,6 +1039,7 @@ def _isolated_codex_home_prepare(
         return
 
     normalized_plugin_selector_list = _plugin_selector_tuple_normalize(plugin_selector_list)
+    _expected_plugin_source_binding_validate(case_list, normalized_plugin_selector_list)
 
     resolved_marketplace_path_list: list[Path] = []
     plugin_source_path_by_name_by_marketplace_name_map: dict[str, dict[str, Path]] = {}
@@ -1120,37 +1119,30 @@ def _isolated_codex_home_prepare(
             raise SkillBehaviorEvalError(f"plugin selector references an unprovided marketplace: {plugin_selector}")
         if plugin_name not in plugin_source_path_by_name_by_marketplace_name_map[marketplace_name]:
             raise SkillBehaviorEvalError(f"plugin selector is absent from its provided marketplace: {plugin_selector}")
-
-    source_codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser().resolve()
-    source_auth_path = source_codex_home / "auth.json"
-    if not source_auth_path.is_file():
-        raise SkillBehaviorEvalError(
-            f"cannot prepare isolated Codex home because authentication file is absent: {source_auth_path}"
-        )
-    codex_home.mkdir(parents=True, exist_ok=False)
-    (codex_home / "auth.json").symlink_to(source_auth_path)
-
-    for resolved_marketplace_path in resolved_marketplace_path_list:
-        _checked_codex_command_run(
-            ["plugin", "marketplace", "add", str(resolved_marketplace_path)],
-            codex_bin=codex_bin,
-            codex_home=codex_home,
-            context=f"cannot add plugin marketplace {resolved_marketplace_path}",
-        )
-
-    for plugin_selector in normalized_plugin_selector_list:
-        _checked_codex_command_run(
-            ["plugin", "add", plugin_selector],
-            codex_bin=codex_bin,
-            codex_home=codex_home,
-            context=f"cannot install plugin {plugin_selector}",
-        )
+        plugin_source_path = plugin_source_path_by_name_by_marketplace_name_map[marketplace_name][plugin_name]
+        plugin_manifest_path = plugin_source_path / ".codex-plugin/plugin.json"
+        try:
+            plugin_manifest = json.loads(plugin_manifest_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise SkillBehaviorEvalError(f"plugin manifest is unavailable or invalid: {plugin_manifest_path}") from exc
+        if not isinstance(plugin_manifest, dict) or plugin_manifest.get("name") != plugin_name:
+            raise SkillBehaviorEvalError(f"plugin manifest identity differs from its selector: {plugin_selector}")
+        plugin_version = plugin_manifest.get("version")
+        if not isinstance(plugin_version, str) or not plugin_version.strip():
+            raise SkillBehaviorEvalError(f"plugin manifest version is absent: {plugin_selector}")
+        cached_plugin_path = standard_codex_home / "plugins/cache" / marketplace_name / plugin_name / plugin_version
+        if not cached_plugin_path.is_dir():
+            raise SkillBehaviorEvalError(f"server bootstrap did not prepare the selected plugin: {plugin_selector}")
+        if _plugin_file_sha256_by_relative_path_map_get(
+            plugin_source_path
+        ) != _plugin_file_sha256_by_relative_path_map_get(cached_plugin_path):
+            raise SkillBehaviorEvalError(f"server-prepared plugin differs from its declared source: {plugin_selector}")
 
 
 def _plugin_selector_tuple_normalize(
     plugin_selector_list: Sequence[str],
 ) -> tuple[str, ...]:
-    """Validate and normalize exact plugin selectors before installation.
+    """Validate and normalize exact plugin selectors before source binding.
 
     Args:
         plugin_selector_list: Ordered plugin selector values.
@@ -1174,7 +1166,7 @@ def _expected_plugin_source_binding_validate(
     case_list: Sequence[SkillBehaviorCase],
     plugin_selector_list: Sequence[str],
 ) -> None:
-    """Require every expected provider in the exact isolated source set.
+    """Require every expected provider in the exact declared source set.
 
     Args:
         case_list: Ordered case values.
@@ -1193,7 +1185,7 @@ def _expected_plugin_source_binding_validate(
     missing_plugin_name_list = sorted(expected_plugin_name_set - installed_plugin_name_set)
     if missing_plugin_name_list:
         raise SkillBehaviorEvalError(
-            "isolated source binding omits plugins required by selected cases: " + ", ".join(missing_plugin_name_list)
+            "source binding omits plugins required by selected cases: " + ", ".join(missing_plugin_name_list)
         )
 
 
@@ -1487,39 +1479,24 @@ def main(argv_list: Sequence[str] | None = None) -> int:
             for case in case_list:
                 print(f"{case.suite}:{case.id}")
             return 0
-        with ExitStack() as exit_stack:
-            codex_home: Path | None = None
-            if args.plugin_marketplace_path_list or args.plugin_selector_list:
-                _expected_plugin_source_binding_validate(
-                    case_list,
-                    args.plugin_selector_list,
-                )
-                temporary_codex_home_parent = Path(
-                    exit_stack.enter_context(
-                        tempfile.TemporaryDirectory(
-                            prefix="skill-behavior-eval-",
-                            dir=Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser(),
-                        )
-                    )
-                )
-                codex_home = temporary_codex_home_parent / "home"
-                _isolated_codex_home_prepare(
-                    codex_home,
-                    codex_bin=args.codex_bin,
-                    marketplace_path_list=args.plugin_marketplace_path_list,
-                    plugin_selector_list=args.plugin_selector_list,
-                )
-            invocation_config = ModelInvocationConfig(
-                codex_bin=args.codex_bin,
-                model=args.model,
-                reasoning_effort=args.reasoning_effort,
-                codex_home=codex_home,
+        standard_codex_home = Path(_standard_codex_process_environment_get()["HOME"]) / ".codex"
+        if args.plugin_marketplace_path_list or args.plugin_selector_list:
+            _preinstalled_plugin_source_binding_validate(
+                case_list=case_list,
+                marketplace_path_list=args.plugin_marketplace_path_list,
+                plugin_selector_list=args.plugin_selector_list,
+                standard_codex_home=standard_codex_home,
             )
-            result_list = _case_list_evaluate(
-                case_list,
-                concurrency=args.concurrency,
-                invocation_config=invocation_config,
-            )
+        invocation_config = ModelInvocationConfig(
+            codex_bin=args.codex_bin,
+            model=args.model,
+            reasoning_effort=args.reasoning_effort,
+        )
+        result_list = _case_list_evaluate(
+            case_list,
+            concurrency=args.concurrency,
+            invocation_config=invocation_config,
+        )
         result_payload = _result_payload_get(
             invocation_config=invocation_config,
             result_list=result_list,

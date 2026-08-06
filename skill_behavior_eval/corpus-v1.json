@@ -359,6 +359,34 @@
       ]
     },
     {
+      "id": "instruction-behavior-eval-standard-codex-home",
+      "working_directory": "..",
+      "working_directory_mode": "same-branch",
+      "prompt": "Explain how the shared behavior evaluator must launch Codex while validating an unmerged provider worktree, including state isolation, plugin-source binding, waiting, resume identity, and usage telemetry. Do not change files or run the corpus.",
+      "expected_skill_list": [
+        "project-standards:project-foundation",
+        "project-standards:project-instruction-developer"
+      ],
+      "forbidden_skill_list": [
+        "project-standards:project-standard-audit",
+        "agent-workflows:instruction-migration"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "standard-codex-process-state",
+          "text": "The response requires one OS user and that user's standard $HOME/.codex with HOME unchanged and CODEX_HOME absent; server bootstrap owns auth, configuration, plugin installation, caches, sessions, and history, while the evaluator neither creates alternate homes nor copies auth, uses --ephemeral, or disables history. Worktrees and the read-only sandbox provide source and filesystem isolation."
+        },
+        {
+          "id": "exact-plugin-source-binding",
+          "text": "The response requires the evaluator to validate byte-for-byte equality between every declared exact local provider source and its server-prepared installed plugin cache, and to reject missing, remote, escaping, or different source bindings rather than installing plugins itself."
+        },
+        {
+          "id": "native-wait-semantic-resume-exact-usage",
+          "text": "The response leaves process completion and cancellation to native harness waiting without project polling or fixed timeouts, makes resume identity depend only on task inputs, owned revisions, required capabilities, and result-semantic environment or release inputs rather than exact Codex version or unrelated global state, and records usage only when directly exposed exactly without estimates or log parsing."
+        }
+      ]
+    },
+    {
       "id": "indirect-python-orchestration-ownership",
       "working_directory": "../../workflow-control-center",
       "working_directory_mode": "synchronized-main",

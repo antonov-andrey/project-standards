@@ -1083,196 +1083,211 @@ def test_case_list_evaluate_preserves_corpus_order(monkeypatch: pytest.MonkeyPat
     assert [result.id for result in result_list] == ["case-a", "case-b"]
 
 
-def test_isolated_codex_home_installs_exact_marketplace_plugins(
-    monkeypatch: pytest.MonkeyPatch,
+def _plugin_binding_fixture_create(
     tmp_path: Path,
-) -> None:
-    """Behavior evaluation should bind plugin resolution to explicit worktree sources.
+    *,
+    source: dict[str, str] | None = None,
+) -> tuple[Path, Path]:
+    """Create one source marketplace and matching server-prepared cache fixture."""
 
-    Args:
-        monkeypatch: Pytest mutation fixture.
-        tmp_path: Temporary directory path.
-    """
-
-    module = _module_load()
-    source_codex_home = tmp_path / "source-codex-home"
-    source_codex_home.mkdir()
-    source_auth_path = source_codex_home / "auth.json"
-    source_auth_path.write_text("{}\n", encoding="utf-8")
+    marketplace_name = "provider-marketplace"
+    plugin_name = "project-standards"
+    plugin_version = "0.1.0+codex.test"
     marketplace_path = tmp_path / "provider-worktree"
-    plugin_path = marketplace_path / "plugins/provider-plugin"
-    plugin_path.mkdir(parents=True)
+    plugin_source = source or {"source": "local", "path": f"./plugins/{plugin_name}"}
     marketplace_manifest_path = marketplace_path / ".agents/plugins/marketplace.json"
     marketplace_manifest_path.parent.mkdir(parents=True)
     marketplace_manifest_path.write_text(
         json.dumps(
             {
-                "name": "provider-marketplace",
-                "plugins": [
-                    {
-                        "name": "provider-plugin",
-                        "source": {
-                            "source": "local",
-                            "path": "./plugins/provider-plugin",
-                        },
-                    }
-                ],
+                "name": marketplace_name,
+                "plugins": [{"name": plugin_name, "source": plugin_source}],
             }
         )
         + "\n",
         encoding="utf-8",
     )
-    isolated_codex_home = tmp_path / "isolated-codex-home"
-    command_call_list: list[tuple[list[str], str, Path, str]] = []
+    standard_codex_home = tmp_path / "os-user-home/.codex"
+    standard_codex_home.mkdir(parents=True)
+    if plugin_source == {"source": "local", "path": f"./plugins/{plugin_name}"}:
+        source_plugin_path = marketplace_path / f"plugins/{plugin_name}"
+        source_manifest_path = source_plugin_path / ".codex-plugin/plugin.json"
+        source_manifest_path.parent.mkdir(parents=True)
+        source_manifest_path.write_text(
+            json.dumps({"name": plugin_name, "version": plugin_version}) + "\n",
+            encoding="utf-8",
+        )
+        (source_plugin_path / "SKILL.md").write_text("source\n", encoding="utf-8")
+        cache_plugin_path = standard_codex_home / f"plugins/cache/{marketplace_name}/{plugin_name}/{plugin_version}"
+        cache_manifest_path = cache_plugin_path / ".codex-plugin/plugin.json"
+        cache_manifest_path.parent.mkdir(parents=True)
+        cache_manifest_path.write_bytes(source_manifest_path.read_bytes())
+        (cache_plugin_path / "SKILL.md").write_text("source\n", encoding="utf-8")
+    return marketplace_path, standard_codex_home
 
-    monkeypatch.setenv("CODEX_HOME", str(source_codex_home))
-    monkeypatch.setattr(
-        module,
-        "_checked_codex_command_run",
-        lambda argument_list, *, codex_bin, codex_home, context: command_call_list.append(
-            (list(argument_list), codex_bin, codex_home, context)
-        ),
+
+def test_standard_codex_environment_preserves_real_home_and_unset_override(tmp_path: Path) -> None:
+    """The evaluator forwards one unchanged standard-home process environment."""
+
+    module = _module_load()
+    os_user_home = tmp_path / "os-user-home"
+    (os_user_home / ".codex").mkdir(parents=True)
+    environment = {"HOME": str(os_user_home), "PATH": "/usr/bin"}
+
+    assert (
+        module._standard_codex_process_environment_get(
+            environment,
+            os_user_home=os_user_home,
+        )
+        == environment
     )
 
-    module._isolated_codex_home_prepare(
-        isolated_codex_home,
-        codex_bin="codex-test",
+
+@pytest.mark.parametrize(
+    "environment_update",
+    [
+        {"HOME": "/another-home"},
+        {"CODEX_HOME": ""},
+        {"CODEX_HOME": "/another-codex-home"},
+    ],
+)
+def test_standard_codex_environment_rejects_home_substitution(
+    tmp_path: Path,
+    environment_update: dict[str, str],
+) -> None:
+    """HOME substitution and any CODEX_HOME value fail before Codex launch."""
+
+    module = _module_load()
+    os_user_home = tmp_path / "os-user-home"
+    (os_user_home / ".codex").mkdir(parents=True)
+    environment = {"HOME": str(os_user_home), **environment_update}
+
+    with pytest.raises(module.SkillBehaviorEvalError, match="HOME|CODEX_HOME"):
+        module._standard_codex_process_environment_get(
+            environment,
+            os_user_home=os_user_home,
+        )
+
+
+def test_codex_invocation_uses_standard_home_persistent_session_and_native_wait(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The launcher keeps history, forwards standard state and sets no project timeout."""
+
+    module = _module_load()
+    environment = {"HOME": "/home/test-user", "PATH": "/usr/bin"}
+    run_call_list: list[tuple[list[str], dict[str, Any]]] = []
+
+    def _run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        run_call_list.append((command, kwargs))
+        output_path = Path(command[command.index("--output-last-message") + 1])
+        output_path.write_text('{"response":"ok"}\n', encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(module, "_standard_codex_process_environment_get", lambda: environment)
+    monkeypatch.setattr(module.subprocess, "run", _run)
+
+    assert module._codex_payload_get(
+        "prompt",
+        tmp_path,
+        {"type": "object"},
+        module.ModelInvocationConfig(codex_bin="codex", model="gpt-5.6-sol", reasoning_effort="max"),
+    ) == {"response": "ok"}
+    command, run_keyword_by_name_map = run_call_list[0]
+    assert "--ephemeral" not in command
+    assert "--ignore-user-config" not in command
+    assert "history.persistence" not in command
+    assert run_keyword_by_name_map["env"] == environment
+    assert "CODEX_HOME" not in run_keyword_by_name_map["env"]
+    assert "timeout" not in run_keyword_by_name_map
+
+
+def test_preinstalled_plugin_binding_accepts_exact_server_cache(tmp_path: Path) -> None:
+    """Evaluation accepts one exact source already prepared in the standard home."""
+
+    module = _module_load()
+    marketplace_path, standard_codex_home = _plugin_binding_fixture_create(tmp_path)
+    corpus_path = tmp_path / "corpus.json"
+    _corpus_write(corpus_path)
+
+    module._preinstalled_plugin_source_binding_validate(
+        case_list=module._selected_case_list_get(case_id_list=[], corpus_path_list=[corpus_path]),
         marketplace_path_list=[marketplace_path],
-        plugin_selector_list=["provider-plugin@provider-marketplace"],
+        plugin_selector_list=["project-standards@provider-marketplace"],
+        standard_codex_home=standard_codex_home,
     )
 
-    assert (isolated_codex_home / "auth.json").is_symlink()
-    assert (isolated_codex_home / "auth.json").resolve() == source_auth_path
-    assert [call[0] for call in command_call_list] == [
-        ["plugin", "marketplace", "add", str(marketplace_path.resolve())],
-        ["plugin", "add", "provider-plugin@provider-marketplace"],
-    ]
-    assert all(call[1] == "codex-test" and call[2] == isolated_codex_home for call in command_call_list)
+
+def test_preinstalled_plugin_binding_rejects_cache_drift(tmp_path: Path) -> None:
+    """A stale or different server cache cannot stand in for the declared source."""
+
+    module = _module_load()
+    marketplace_path, standard_codex_home = _plugin_binding_fixture_create(tmp_path)
+    cache_skill_path = next(standard_codex_home.glob("plugins/cache/*/*/*/SKILL.md"))
+    cache_skill_path.write_text("different\n", encoding="utf-8")
+
+    with pytest.raises(module.SkillBehaviorEvalError, match="differs from its declared source"):
+        module._preinstalled_plugin_source_binding_validate(
+            case_list=[],
+            marketplace_path_list=[marketplace_path],
+            plugin_selector_list=["project-standards@provider-marketplace"],
+            standard_codex_home=standard_codex_home,
+        )
 
 
-def test_isolated_codex_home_rejects_partial_source_binding(tmp_path: Path) -> None:
-    """A source override without exact plugin selectors must fail closed.
-
-    Args:
-        tmp_path: Temporary directory path.
-    """
+def test_preinstalled_plugin_binding_rejects_partial_source_binding(tmp_path: Path) -> None:
+    """A source declaration without exact plugin selectors fails closed."""
 
     module = _module_load()
 
     with pytest.raises(module.SkillBehaviorEvalError, match="must be supplied together"):
-        module._isolated_codex_home_prepare(
-            tmp_path / "isolated-codex-home",
-            codex_bin="codex",
+        module._preinstalled_plugin_source_binding_validate(
+            case_list=[],
             marketplace_path_list=[tmp_path / "provider-worktree"],
             plugin_selector_list=[],
+            standard_codex_home=tmp_path / "os-user-home/.codex",
         )
 
 
-def test_isolated_codex_home_rejects_selector_outside_provided_marketplace(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """A selector cannot resolve from a built-in or previously known marketplace.
-
-    Args:
-        monkeypatch: Pytest mutation fixture.
-        tmp_path: Temporary directory path.
-    """
+def test_preinstalled_plugin_binding_rejects_selector_outside_provided_marketplace(tmp_path: Path) -> None:
+    """A selector cannot resolve from an undeclared server marketplace."""
 
     module = _module_load()
-    source_codex_home = tmp_path / "source-codex-home"
-    source_codex_home.mkdir()
-    (source_codex_home / "auth.json").write_text("{}\n", encoding="utf-8")
-    marketplace_path = tmp_path / "provider-worktree"
-    plugin_path = marketplace_path / "plugins/provider-plugin"
-    plugin_path.mkdir(parents=True)
-    manifest_path = marketplace_path / ".agents/plugins/marketplace.json"
-    manifest_path.parent.mkdir(parents=True)
-    manifest_path.write_text(
-        json.dumps(
-            {
-                "name": "provided-marketplace",
-                "plugins": [
-                    {
-                        "name": "provider-plugin",
-                        "source": {
-                            "source": "local",
-                            "path": "./plugins/provider-plugin",
-                        },
-                    }
-                ],
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("CODEX_HOME", str(source_codex_home))
+    marketplace_path, standard_codex_home = _plugin_binding_fixture_create(tmp_path)
 
-    with pytest.raises(
-        module.SkillBehaviorEvalError,
-        match="unprovided marketplace",
-    ):
-        module._isolated_codex_home_prepare(
-            tmp_path / "isolated-codex-home",
-            codex_bin="codex",
+    with pytest.raises(module.SkillBehaviorEvalError, match="unprovided marketplace"):
+        module._preinstalled_plugin_source_binding_validate(
+            case_list=[],
             marketplace_path_list=[marketplace_path],
-            plugin_selector_list=["provider-plugin@another-marketplace"],
+            plugin_selector_list=["project-standards@another-marketplace"],
+            standard_codex_home=standard_codex_home,
         )
 
 
 @pytest.mark.parametrize(
     ("source", "error_pattern"),
     [
-        (
-            {"source": "git", "url": "https://example.invalid/provider.git"},
-            "must be one local path",
-        ),
-        (
-            {"source": "local", "path": "../outside-plugin"},
-            "escapes its provided marketplace",
-        ),
+        ({"source": "git", "url": "https://example.invalid/provider.git"}, "must be one local path"),
+        ({"source": "local", "path": "../outside-plugin"}, "escapes its provided marketplace"),
     ],
 )
-def test_isolated_codex_home_rejects_non_worktree_plugin_source(
-    monkeypatch: pytest.MonkeyPatch,
+def test_preinstalled_plugin_binding_rejects_non_worktree_plugin_source(
     tmp_path: Path,
     source: dict[str, str],
     error_pattern: str,
 ) -> None:
-    """An exact marketplace binding cannot redirect a selected plugin elsewhere.
-
-    Args:
-        monkeypatch: Pytest mutation fixture.
-        tmp_path: Temporary directory path.
-        source: Source.
-        error_pattern: Error pattern.
-    """
+    """A declared source cannot redirect the server binding outside its worktree."""
 
     module = _module_load()
-    source_codex_home = tmp_path / "source-codex-home"
-    source_codex_home.mkdir()
-    (source_codex_home / "auth.json").write_text("{}\n", encoding="utf-8")
-    marketplace_path = tmp_path / "provider-worktree"
-    manifest_path = marketplace_path / ".agents/plugins/marketplace.json"
-    manifest_path.parent.mkdir(parents=True)
-    manifest_path.write_text(
-        json.dumps(
-            {
-                "name": "provided-marketplace",
-                "plugins": [{"name": "provider-plugin", "source": source}],
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("CODEX_HOME", str(source_codex_home))
+    marketplace_path, standard_codex_home = _plugin_binding_fixture_create(tmp_path, source=source)
 
     with pytest.raises(module.SkillBehaviorEvalError, match=error_pattern):
-        module._isolated_codex_home_prepare(
-            tmp_path / "isolated-codex-home",
-            codex_bin="codex",
+        module._preinstalled_plugin_source_binding_validate(
+            case_list=[],
             marketplace_path_list=[marketplace_path],
-            plugin_selector_list=["provider-plugin@provided-marketplace"],
+            plugin_selector_list=["project-standards@provider-marketplace"],
+            standard_codex_home=standard_codex_home,
         )
 
 
