@@ -378,7 +378,7 @@
         },
         {
           "id": "exact-plugin-source-binding",
-          "text": "The response requires source binding for every model run, derives required providers from both expected and forbidden activation sets, validates byte-for-byte equality between every declared exact local provider source and its server-prepared physical installed plugin cache under a physical standard cache root, and rejects absent, ambient-version, invalid-identity, invalid-version, traversal, symbolic, remote, escaping, or different bindings rather than installing plugins itself."
+          "text": "The response requires source binding for every model run, derives required providers from the union of expected, forbidden, and resolved actually activated providers before judging, validates byte-for-byte equality between every declared exact local provider source and its server-prepared physical installed plugin cache under a physical standard cache root, and rejects absent, ambient-version, invalid-identity, invalid-version, traversal, symbolic, remote, escaping, or different bindings rather than installing plugins itself."
         },
         {
           "id": "native-wait-semantic-resume-exact-usage",

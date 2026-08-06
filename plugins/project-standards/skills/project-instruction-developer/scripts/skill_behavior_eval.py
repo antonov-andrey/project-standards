@@ -11,11 +11,12 @@ import pwd
 import re
 import subprocess
 import tempfile
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 import yaml
@@ -39,9 +40,9 @@ _SEMVER_PATTERN = re.compile(
 )
 _YAML_12_NON_STRING_PLAIN_SCALAR_PATTERN = re.compile(
     r"(?:~|null|Null|NULL|true|True|TRUE|false|False|FALSE|"
-    r"[-+]?(?:0|[1-9][0-9]*|0o[0-7]+|0x[0-9a-fA-F]+)|"
-    r"[-+]?(?:(?:0|[1-9][0-9]*)\.[0-9]*(?:[eE][-+]?[0-9]+)?|"
-    r"\.[0-9]+(?:[eE][-+]?[0-9]+)?|(?:0|[1-9][0-9]*)(?:[eE][-+]?[0-9]+)|"
+    r"[-+]?(?:[0-9]+|0o[0-7]+|0x[0-9a-fA-F]+)|"
+    r"[-+]?(?:[0-9]+\.[0-9]*(?:[eE][-+]?[0-9]+)?|"
+    r"\.[0-9]+(?:[eE][-+]?[0-9]+)?|[0-9]+(?:[eE][-+]?[0-9]+)|"
     r"\.inf|\.Inf|\.INF|\.nan|\.NaN|\.NAN))"
 )
 
@@ -70,6 +71,7 @@ _CASE_FAILURE_MESSAGE_BY_CODE_MAP = {
     "codex-usage-invalid": "Codex completion usage is invalid.",
     "generation-validation-failed": "Generation result validation failed.",
     "judge-validation-failed": "Judge result validation failed.",
+    "provider-binding-drift": "Provider source binding changed during evaluation.",
 }
 
 _JUDGE_OUTPUT_SCHEMA: dict[str, Any] = {
@@ -208,6 +210,45 @@ class ModelInvocationResult:
 
     payload: dict[str, Any]
     usage: CodexUsage
+
+
+@dataclass(frozen=True, slots=True)
+class PluginSourceBinding:
+    """Bind one provider source and cache to their validated file snapshot."""
+
+    cache_path: Path
+    file_sha256_by_relative_path_map: Mapping[str, str]
+    source_path: Path
+
+    def __post_init__(self) -> None:
+        """Freeze one validated file map inside the immutable provider binding."""
+
+        object.__setattr__(
+            self,
+            "file_sha256_by_relative_path_map",
+            MappingProxyType(dict(self.file_sha256_by_relative_path_map)),
+        )
+
+    def validate(self, *, plugin_name: str) -> None:
+        """Revalidate both physical trees against the exact accepted snapshot.
+
+        Args:
+            plugin_name: Provider identity owned by this binding.
+        """
+
+        for path in (self.source_path, self.cache_path):
+            try:
+                resolved_path = path.resolve(strict=True)
+            except OSError as error:
+                raise SkillBehaviorEvalError(f"provider source binding drifted: {plugin_name}") from error
+            if Path(os.path.abspath(path)) != resolved_path or path.is_symlink() or not resolved_path.is_dir():
+                raise SkillBehaviorEvalError(f"provider source binding drifted: {plugin_name}")
+            try:
+                current_file_sha256_by_relative_path_map = _plugin_file_sha256_by_relative_path_map_get(path)
+            except (OSError, SkillBehaviorEvalError) as error:
+                raise SkillBehaviorEvalError(f"provider source binding drifted: {plugin_name}") from error
+            if current_file_sha256_by_relative_path_map != self.file_sha256_by_relative_path_map:
+                raise SkillBehaviorEvalError(f"provider source binding drifted: {plugin_name}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -404,6 +445,38 @@ class SkillBehaviorEvaluationAttempt:
         if self.have_failure():
             raise SkillBehaviorEvalError("A failed evaluation attempt has no acceptance result list")
         return [attempt.result for attempt in self.case_attempt_list if attempt.result is not None]
+
+    def provider_binding_drift_get(self) -> SkillBehaviorEvaluationAttempt:
+        """Convert every terminal case to one typed provider-drift non-acceptance.
+
+        Returns:
+            A closed non-acceptance attempt with all completed usage preserved.
+        """
+
+        case_attempt_list: list[SkillBehaviorCaseAttempt] = []
+        for attempt in self.case_attempt_list:
+            if attempt.failure is not None:
+                generation_usage = attempt.failure.codex_usage_generation
+                judge_usage = attempt.failure.codex_usage_judge
+                case_id = attempt.failure.id
+                suite = attempt.failure.suite
+            else:
+                if attempt.result is None:
+                    raise SkillBehaviorEvalError("Case attempt result is absent")
+                generation_usage = attempt.result.codex_usage_generation
+                judge_usage = attempt.result.codex_usage_judge
+                case_id = attempt.result.id
+                suite = attempt.result.suite
+            failure = SkillBehaviorCaseFailure(
+                codex_usage_generation=generation_usage,
+                codex_usage_judge=judge_usage,
+                error_code="provider-binding-drift",
+                error_message=_CASE_FAILURE_MESSAGE_BY_CODE_MAP["provider-binding-drift"],
+                id=case_id,
+                suite=suite,
+            )
+            case_attempt_list.append(SkillBehaviorCaseAttempt(failure=failure, result=None))
+        return SkillBehaviorEvaluationAttempt(case_attempt_list=tuple(case_attempt_list))
 
 
 ModelCall = Callable[[str, Path, dict[str, Any], ModelInvocationConfig], ModelInvocationResult]
@@ -1030,8 +1103,11 @@ def _corpus_case_list_load(
 
     resolved_corpus_path = corpus_path.expanduser().resolve()
     try:
-        payload = json.loads(resolved_corpus_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        payload = _json_duplicate_rejecting_load(
+            resolved_corpus_path.read_text(encoding="utf-8"),
+            context=f"behavior corpus {resolved_corpus_path}",
+        )
+    except (OSError, UnicodeDecodeError, SkillBehaviorEvalError) as exc:
         raise SkillBehaviorEvalError(f"{resolved_corpus_path}: cannot load corpus: {exc}") from exc
     if not isinstance(payload, dict):
         raise SkillBehaviorEvalError(f"{resolved_corpus_path}: corpus root must be an object")
@@ -1257,8 +1333,8 @@ def _codex_usage_get(event_jsonl: str) -> CodexUsage:
     completed_usage_list: list[CodexUsage] = []
     for index, event_text in enumerate(event_jsonl.splitlines()):
         try:
-            event = json.loads(event_text)
-        except json.JSONDecodeError as exc:
+            event = _json_duplicate_rejecting_load(event_text, context=f"Codex JSONL event[{index}]")
+        except SkillBehaviorEvalError as exc:
             raise SkillBehaviorEvalError(f"Codex JSONL event[{index}] is invalid JSON") from exc
         if not isinstance(event, dict) or not isinstance(event.get("type"), str):
             raise SkillBehaviorEvalError(f"Codex JSONL event[{index}] has another shape")
@@ -1357,8 +1433,11 @@ def _codex_payload_get(
                 )
             ) from usage_error
         try:
-            payload = json.loads(output_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as error:
+            payload = _json_duplicate_rejecting_load(
+                output_path.read_text(encoding="utf-8"),
+                context="Codex structured output",
+            )
+        except (OSError, UnicodeDecodeError, SkillBehaviorEvalError) as error:
             raise ModelInvocationError(
                 ModelInvocationFailure(
                     error_code="codex-output-invalid",
@@ -1428,7 +1507,7 @@ def _preinstalled_plugin_source_binding_validate(
     marketplace_path_list: Sequence[Path],
     plugin_selector_list: Sequence[str],
     standard_codex_home: Path,
-) -> dict[str, Path]:
+) -> dict[str, PluginSourceBinding]:
     """Require server-prepared plugins to equal the declared local sources.
 
     Args:
@@ -1438,7 +1517,7 @@ def _preinstalled_plugin_source_binding_validate(
         standard_codex_home: Current OS user's standard Codex home.
 
     Returns:
-        Exact validated provider source root by provider.
+        Exact validated source/cache binding by provider.
     """
 
     if bool(marketplace_path_list) != bool(plugin_selector_list):
@@ -1541,7 +1620,7 @@ def _preinstalled_plugin_source_binding_validate(
             plugin_source_path_by_name_map[plugin_name] = plugin_source_path
         plugin_source_path_by_name_by_marketplace_name_map[normalized_marketplace_name] = plugin_source_path_by_name_map
 
-    plugin_source_path_by_name_map: dict[str, Path] = {}
+    plugin_source_binding_by_name_map: dict[str, PluginSourceBinding] = {}
     for plugin_selector in normalized_plugin_selector_list:
         plugin_name, marketplace_name = plugin_selector.split("@", 1)
         if marketplace_name not in plugin_source_path_by_name_by_marketplace_name_map:
@@ -1577,12 +1656,32 @@ def _preinstalled_plugin_source_binding_validate(
                 f"server-prepared plugin cache must be one physical directory below the standard cache root: "
                 f"{plugin_selector}"
             )
-        if _plugin_file_sha256_by_relative_path_map_get(
-            plugin_source_path
-        ) != _plugin_file_sha256_by_relative_path_map_get(cached_plugin_path):
+        file_sha256_by_relative_path_map = _plugin_file_sha256_by_relative_path_map_get(plugin_source_path)
+        if file_sha256_by_relative_path_map != _plugin_file_sha256_by_relative_path_map_get(cached_plugin_path):
             raise SkillBehaviorEvalError(f"server-prepared plugin differs from its declared source: {plugin_selector}")
-        plugin_source_path_by_name_map[plugin_name] = plugin_source_path
-    return plugin_source_path_by_name_map
+        plugin_source_binding = PluginSourceBinding(
+            cache_path=cached_plugin_path,
+            file_sha256_by_relative_path_map=file_sha256_by_relative_path_map,
+            source_path=plugin_source_path,
+        )
+        plugin_source_binding.validate(plugin_name=plugin_name)
+        plugin_source_binding_by_name_map[plugin_name] = plugin_source_binding
+    return plugin_source_binding_by_name_map
+
+
+def _plugin_source_binding_by_name_map_validate(
+    plugin_source_binding_by_name_map: dict[str, PluginSourceBinding],
+) -> None:
+    """Revalidate every exact provider source/cache binding.
+
+    Args:
+        plugin_source_binding_by_name_map: Exact source/cache binding by provider.
+    """
+
+    for plugin_name, plugin_source_binding in plugin_source_binding_by_name_map.items():
+        if not isinstance(plugin_source_binding, PluginSourceBinding):
+            raise SkillBehaviorEvalError(f"provider source binding has another shape: {plugin_name}")
+        plugin_source_binding.validate(plugin_name=plugin_name)
 
 
 def _plugin_selector_tuple_normalize(
@@ -1769,7 +1868,7 @@ def _case_evaluate(
     case: SkillBehaviorCase,
     *,
     invocation_config: ModelInvocationConfig,
-    plugin_source_path_by_name_map: dict[str, Path],
+    plugin_source_binding_by_name_map: dict[str, PluginSourceBinding],
     model_call: ModelCall = _codex_payload_get,
 ) -> SkillBehaviorCaseResult:
     """Run generation and independent semantic judging for one case.
@@ -1777,7 +1876,7 @@ def _case_evaluate(
     Args:
         case: Case.
         invocation_config: Invocation config.
-        plugin_source_path_by_name_map: Exact validated provider source root by provider.
+        plugin_source_binding_by_name_map: Exact validated source/cache binding by provider.
         model_call: Model call.
 
     Returns:
@@ -1788,6 +1887,7 @@ def _case_evaluate(
     judge_usage: CodexUsage | None = None
     evaluation_stage = "generation"
     try:
+        _plugin_source_binding_by_name_map_validate(plugin_source_binding_by_name_map)
         generation_invocation = model_call(
             _generation_prompt_get(case),
             case.working_directory,
@@ -1795,6 +1895,7 @@ def _case_evaluate(
             invocation_config,
         )
         generation_usage = generation_invocation.usage
+        _plugin_source_binding_by_name_map_validate(plugin_source_binding_by_name_map)
         generation_payload = _generation_payload_validate(
             generation_invocation.payload,
             case=case,
@@ -1802,14 +1903,15 @@ def _case_evaluate(
         activated_skill_list = _activated_skill_tuple_resolve(
             generation_payload["activated_skill_list"],
             case=case,
-            plugin_source_path_by_name_map=plugin_source_path_by_name_map,
+            plugin_source_binding_by_name_map=plugin_source_binding_by_name_map,
         )
         _required_plugin_source_binding_validate(
             [case],
-            plugin_source_path_by_name_map,
+            plugin_source_binding_by_name_map,
             activated_skill_list=activated_skill_list,
         )
         evaluation_stage = "judge"
+        _plugin_source_binding_by_name_map_validate(plugin_source_binding_by_name_map)
         judge_invocation = model_call(
             _judge_prompt_get(case=case, generation_payload=generation_payload),
             case.working_directory,
@@ -1817,6 +1919,7 @@ def _case_evaluate(
             invocation_config,
         )
         judge_usage = judge_invocation.usage
+        _plugin_source_binding_by_name_map_validate(plugin_source_binding_by_name_map)
         judge_result_list = _judge_result_tuple_get(
             judge_invocation.payload,
             case=case,
@@ -1887,29 +1990,20 @@ def _case_evaluate(
         ) from error
 
 
-def _plugin_source_path_validate(plugin_name: str, plugin_source_path: Path) -> Path:
+def _plugin_source_path_validate(plugin_name: str, plugin_source_binding: PluginSourceBinding) -> Path:
     """Require one physical source root whose manifest owns the provider identity.
 
     Args:
         plugin_name: Exact provider identity.
-        plugin_source_path: Bound source root.
+        plugin_source_binding: Exact source/cache binding.
 
     Returns:
         Physical resolved provider source root.
     """
 
     _plugin_identity_validate(plugin_name, label="activated skill plugin name")
-    try:
-        resolved_plugin_source_path = plugin_source_path.resolve(strict=True)
-    except OSError as exc:
-        raise SkillBehaviorEvalError(f"activated provider source is unavailable: {plugin_name}") from exc
-    if (
-        Path(os.path.abspath(plugin_source_path)) != resolved_plugin_source_path
-        or plugin_source_path.is_symlink()
-        or not resolved_plugin_source_path.is_dir()
-    ):
-        raise SkillBehaviorEvalError(f"activated provider source is not one physical directory: {plugin_name}")
-    plugin_manifest_path = resolved_plugin_source_path / ".codex-plugin/plugin.json"
+    plugin_source_binding.validate(plugin_name=plugin_name)
+    plugin_manifest_path = plugin_source_binding.source_path / ".codex-plugin/plugin.json"
     try:
         plugin_manifest = _json_duplicate_rejecting_load(
             plugin_manifest_path.read_text(encoding="utf-8"),
@@ -1919,7 +2013,7 @@ def _plugin_source_path_validate(plugin_name: str, plugin_source_path: Path) -> 
         raise SkillBehaviorEvalError(f"activated provider source manifest is invalid: {plugin_name}") from exc
     if not isinstance(plugin_manifest, dict) or plugin_manifest.get("name") != plugin_name:
         raise SkillBehaviorEvalError(f"activated provider source identity is mismatched: {plugin_name}")
-    return resolved_plugin_source_path
+    return plugin_source_binding.source_path
 
 
 def _skill_frontmatter_get(skill_text: str, *, context: str, skill_path: Path) -> dict[str, str]:
@@ -2017,13 +2111,13 @@ def _skill_path_resolve(
 def _qualified_activated_skill_resolve(
     activated_skill_name: str,
     *,
-    plugin_source_path_by_name_map: dict[str, Path],
+    plugin_source_binding_by_name_map: dict[str, PluginSourceBinding],
 ) -> str:
     """Resolve one qualified activation to its exact bound provider SKILL.md.
 
     Args:
         activated_skill_name: Provider-qualified activation identity.
-        plugin_source_path_by_name_map: Exact validated provider source roots.
+        plugin_source_binding_by_name_map: Exact validated source/cache bindings.
 
     Returns:
         The unchanged exact qualified activation identity.
@@ -2034,11 +2128,11 @@ def _qualified_activated_skill_resolve(
     plugin_name, skill_name = activated_skill_name.split(":", 1)
     _plugin_identity_validate(plugin_name, label="activated skill plugin name")
     _plugin_identity_validate(skill_name, label="activated skill name")
-    if plugin_name not in plugin_source_path_by_name_map:
+    if plugin_name not in plugin_source_binding_by_name_map:
         raise SkillBehaviorEvalError(f"activated skill has no exact bound provider source: {activated_skill_name}")
     plugin_source_path = _plugin_source_path_validate(
         plugin_name,
-        plugin_source_path_by_name_map[plugin_name],
+        plugin_source_binding_by_name_map[plugin_name],
     )
     if (
         _skill_path_resolve(
@@ -2085,14 +2179,14 @@ def _activated_skill_tuple_resolve(
     activated_skill_list: Sequence[str],
     *,
     case: SkillBehaviorCase,
-    plugin_source_path_by_name_map: dict[str, Path],
+    plugin_source_binding_by_name_map: dict[str, PluginSourceBinding],
 ) -> tuple[str, ...]:
     """Resolve every activation to one exact provider or project-local SKILL.md.
 
     Args:
         activated_skill_list: Ordered activated skill values.
         case: Case.
-        plugin_source_path_by_name_map: Exact validated provider source roots.
+        plugin_source_binding_by_name_map: Exact validated source/cache bindings.
 
     Returns:
         Values in deterministic immutable order.
@@ -2105,7 +2199,7 @@ def _activated_skill_tuple_resolve(
         if ":" in activated_skill_name:
             normalized_skill_name = _qualified_activated_skill_resolve(
                 activated_skill_name,
-                plugin_source_path_by_name_map=plugin_source_path_by_name_map,
+                plugin_source_binding_by_name_map=plugin_source_binding_by_name_map,
             )
         else:
             _plugin_identity_validate(activated_skill_name, label="activated skill name")
@@ -2118,7 +2212,7 @@ def _activated_skill_tuple_resolve(
             for candidate in candidate_list:
                 _qualified_activated_skill_resolve(
                     candidate,
-                    plugin_source_path_by_name_map=plugin_source_path_by_name_map,
+                    plugin_source_binding_by_name_map=plugin_source_binding_by_name_map,
                 )
             if _project_local_skill_path_get(case, activated_skill_name) is not None:
                 candidate_list.append(activated_skill_name)
@@ -2246,7 +2340,7 @@ def _case_list_evaluate(
     *,
     concurrency: int,
     invocation_config: ModelInvocationConfig,
-    plugin_source_path_by_name_map: dict[str, Path],
+    plugin_source_binding_by_name_map: dict[str, PluginSourceBinding],
 ) -> SkillBehaviorEvaluationAttempt:
     """Evaluate cases concurrently while preserving corpus order in the result.
 
@@ -2254,7 +2348,7 @@ def _case_list_evaluate(
         case_list: Ordered case values.
         concurrency: Concurrency.
         invocation_config: Invocation config.
-        plugin_source_path_by_name_map: Exact validated provider source root by provider.
+        plugin_source_binding_by_name_map: Exact validated source/cache binding by provider.
 
     Returns:
         Fully drained terminal case attempts in deterministic corpus order.
@@ -2286,7 +2380,7 @@ def _case_list_evaluate(
                     _case_evaluate,
                     case,
                     invocation_config=invocation_config,
-                    plugin_source_path_by_name_map=plugin_source_path_by_name_map,
+                    plugin_source_binding_by_name_map=plugin_source_binding_by_name_map,
                 )
             except Exception:
                 failure = SkillBehaviorCaseFailure(
@@ -2362,7 +2456,7 @@ def main(argv_list: Sequence[str] | None = None) -> int:
                 print(f"{case.suite}:{case.id}")
             return 0
         standard_codex_home = Path(_standard_codex_process_environment_get()["HOME"]) / ".codex"
-        plugin_source_path_by_name_map = _preinstalled_plugin_source_binding_validate(
+        plugin_source_binding_by_name_map = _preinstalled_plugin_source_binding_validate(
             case_list=case_list,
             marketplace_path_list=args.plugin_marketplace_path_list,
             plugin_selector_list=args.plugin_selector_list,
@@ -2377,8 +2471,12 @@ def main(argv_list: Sequence[str] | None = None) -> int:
             case_list,
             concurrency=args.concurrency,
             invocation_config=invocation_config,
-            plugin_source_path_by_name_map=plugin_source_path_by_name_map,
+            plugin_source_binding_by_name_map=plugin_source_binding_by_name_map,
         )
+        try:
+            _plugin_source_binding_by_name_map_validate(plugin_source_binding_by_name_map)
+        except SkillBehaviorEvalError:
+            evaluation_attempt = evaluation_attempt.provider_binding_drift_get()
         if evaluation_attempt.have_failure():
             non_acceptance_payload = evaluation_attempt.non_acceptance_payload_get(invocation_config)
             if args.output is not None:

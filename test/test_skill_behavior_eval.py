@@ -652,6 +652,67 @@ def test_runner_publishes_non_acceptance_attempt_after_case_failure(
         acceptance_module.acceptance_state_get([payload])
 
 
+def test_runner_revalidates_provider_binding_before_publication(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Publication-time source drift becomes typed non-acceptance with full usage.
+
+    Args:
+        monkeypatch: Pytest mutation fixture.
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    corpus_path = tmp_path / "skill_behavior_eval/corpus-v1.json"
+    corpus_path.parent.mkdir()
+    _corpus_write(corpus_path, expected_skill_list=[], forbidden_skill_list=[])
+    output_path = tmp_path / "non-acceptance.json"
+    plugin_source_binding_by_name_map = _plugin_source_binding_by_name_map_create(
+        module,
+        tmp_path,
+        {"project-standards": []},
+    )
+    result = module.SkillBehaviorCaseResult(
+        activated_skill_list=(),
+        codex_usage_generation=module.CodexUsage(**_codex_usage_payload()),
+        codex_usage_judge=module.CodexUsage(**_codex_usage_payload(2)),
+        forbidden_activated_skill_list=(),
+        id="case-a",
+        missing_expected_skill_list=(),
+        passed=True,
+        response="Read-only response.",
+        semantic_invariant_result_list=(),
+        suite="provider",
+    )
+    evaluation_attempt = module.SkillBehaviorEvaluationAttempt(
+        case_attempt_list=(module.SkillBehaviorCaseAttempt(failure=None, result=result),)
+    )
+
+    def _case_list_evaluate(*_args: Any, **_kwargs: Any) -> Any:
+        """Mutate the source after evaluation but before publication."""
+
+        binding = plugin_source_binding_by_name_map["project-standards"]
+        (binding.source_path / "SKILL.md").write_text("publication drift\n", encoding="utf-8")
+        return evaluation_attempt
+
+    monkeypatch.setattr(module, "_standard_codex_process_environment_get", lambda: {"HOME": str(tmp_path)})
+    monkeypatch.setattr(
+        module,
+        "_preinstalled_plugin_source_binding_validate",
+        lambda **_kwargs: plugin_source_binding_by_name_map,
+    )
+    monkeypatch.setattr(module, "_case_list_evaluate", _case_list_evaluate)
+
+    return_code = module.main(["--corpus", str(corpus_path), "--output", str(output_path)])
+
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert return_code == 2
+    assert payload["case_usage_list"][0]["error_code"] == "provider-binding-drift"
+    assert payload["case_usage_list"][0]["codex_usage_generation"] == _codex_usage_payload()
+    assert payload["case_usage_list"][0]["codex_usage_judge"] == _codex_usage_payload(2)
+
+
 def _plugin_source_path_create(
     root: Path,
     plugin_name: str,
@@ -684,28 +745,40 @@ def _plugin_source_path_create(
     return root.resolve()
 
 
-def _plugin_source_path_by_name_map_create(
+def _plugin_source_binding_by_name_map_create(
+    module: Any,
     root: Path,
     skill_name_list_by_plugin_name_map: dict[str, list[str]],
-) -> dict[str, Path]:
-    """Create exact physical source roots for each test provider.
+) -> dict[str, Any]:
+    """Create exact source/cache bindings for each test provider.
 
     Args:
+        module: Loaded evaluator module that owns the binding type.
         root: Parent fixture directory.
         skill_name_list_by_plugin_name_map: Skill identities by provider.
 
     Returns:
-        Exact provider source root mapping.
+        Exact provider source/cache binding mapping.
     """
 
-    return {
-        plugin_name: _plugin_source_path_create(
+    plugin_source_binding_by_name_map = {}
+    for plugin_name, skill_name_list in skill_name_list_by_plugin_name_map.items():
+        source_path = _plugin_source_path_create(
             root / f"provider-{plugin_name}",
             plugin_name,
             skill_name_list,
         )
-        for plugin_name, skill_name_list in skill_name_list_by_plugin_name_map.items()
-    }
+        cache_path = _plugin_source_path_create(
+            root / f"cache-{plugin_name}",
+            plugin_name,
+            skill_name_list,
+        )
+        plugin_source_binding_by_name_map[plugin_name] = module.PluginSourceBinding(
+            cache_path=cache_path,
+            file_sha256_by_relative_path_map=module._plugin_file_sha256_by_relative_path_map_get(source_path),
+            source_path=source_path,
+        )
+    return plugin_source_binding_by_name_map
 
 
 @pytest.mark.parametrize(
@@ -721,6 +794,15 @@ def _plugin_source_path_by_name_map_create(
         "---\ndescription: Missing name.\n---\n",
         "---\nname: test-skill\n---\n",
         "---\nname: test-skill\ndescription: null\n---\n",
+        "---\nname: test-skill\ndescription: 01\n---\n",
+        "---\nname: test-skill\ndescription: +01\n---\n",
+        "---\nname: test-skill\ndescription: -01\n---\n",
+        "---\nname: test-skill\ndescription: 01.2\n---\n",
+        "---\nname: test-skill\ndescription: +01.2\n---\n",
+        "---\nname: test-skill\ndescription: -01.2\n---\n",
+        "---\nname: test-skill\ndescription: 01e2\n---\n",
+        "---\nname: test-skill\ndescription: +01e2\n---\n",
+        "---\nname: test-skill\ndescription: -01e2\n---\n",
         "---\nname: '   '\ndescription: Whitespace-only name.\n---\n",
         "---\nname: test-skill\ndescription: '   '\n---\n",
         (
@@ -739,6 +821,15 @@ def _plugin_source_path_by_name_map_create(
         "missing-name",
         "missing-description",
         "non-string-description",
+        "leading-zero-integer",
+        "leading-zero-integer-positive",
+        "leading-zero-integer-negative",
+        "leading-zero-float",
+        "leading-zero-float-positive",
+        "leading-zero-float-negative",
+        "leading-zero-exponent",
+        "leading-zero-exponent-positive",
+        "leading-zero-exponent-negative",
         "whitespace-only-name",
         "whitespace-only-description",
         "multiple-documents",
@@ -771,7 +862,19 @@ def test_skill_path_resolve_rejects_noncanonical_frontmatter(
 
 @pytest.mark.parametrize(
     "description",
-    ["Exact schema.", "yes", "no", "on", "off", "2026-08-07", "2001-12-15T02:59:43.1Z"],
+    [
+        "Exact schema.",
+        "yes",
+        "no",
+        "on",
+        "off",
+        "2026-08-07",
+        "2001-12-15T02:59:43.1Z",
+        "'01'",
+        "'-01'",
+        "'01.2'",
+        "'01e2'",
+    ],
 )
 def test_skill_path_resolve_accepts_exact_frontmatter_delimiter_lines(description: str, tmp_path: Path) -> None:
     """An exact closed frontmatter document may be followed by Markdown delimiter lines.
@@ -1358,6 +1461,35 @@ def test_corpus_load_normalizes_invalid_utf8(tmp_path: Path) -> None:
         module._corpus_case_list_load(corpus_path)
 
 
+@pytest.mark.parametrize(
+    "corpus_text",
+    [
+        '{"schema_version":1,"suite":"provider","suite":"other","case_list":[]}',
+        (
+            '{"schema_version":1,"suite":"provider","case_list":[{'
+            '"id":"case-a","id":"case-b","working_directory":"..",'
+            '"working_directory_mode":"same-branch","prompt":"Review.",'
+            '"expected_skill_list":[],"forbidden_skill_list":[],"semantic_invariant_list":[]}]}'
+        ),
+    ],
+    ids=["root", "nested-case"],
+)
+def test_corpus_load_rejects_duplicate_json_keys(corpus_text: str, tmp_path: Path) -> None:
+    """Every corpus object rejects duplicate keys at its JSON boundary.
+
+    Args:
+        corpus_text: Corpus document with one duplicate object key.
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    corpus_path = tmp_path / "corpus-v1.json"
+    corpus_path.write_text(corpus_text, encoding="utf-8")
+
+    with pytest.raises(module.SkillBehaviorEvalError, match="cannot load corpus"):
+        module._corpus_case_list_load(corpus_path)
+
+
 def test_git_repository_root_preserves_non_utf8_filesystem_text(tmp_path: Path) -> None:
     """Git discovery must decode valid filesystem bytes with surrogateescape.
 
@@ -1389,7 +1521,8 @@ def test_case_evaluate_combines_activation_and_independent_judge(
     corpus_path = corpus_root / "corpus-v1.json"
     _corpus_write(corpus_path)
     case = module._corpus_case_list_load(corpus_path)[0]
-    plugin_source_path_by_name_map = _plugin_source_path_by_name_map_create(
+    plugin_source_binding_by_name_map = _plugin_source_binding_by_name_map_create(
+        module,
         tmp_path,
         {
             "agent-workflows": ["code-audit"],
@@ -1452,7 +1585,7 @@ def test_case_evaluate_combines_activation_and_independent_judge(
             model="gpt-5.6-sol",
             reasoning_effort="medium",
         ),
-        plugin_source_path_by_name_map=plugin_source_path_by_name_map,
+        plugin_source_binding_by_name_map=plugin_source_binding_by_name_map,
         model_call=_model_call,
     )
 
@@ -1479,7 +1612,8 @@ def test_case_evaluate_reports_missing_and_forbidden_activations(
     corpus_path = corpus_root / "corpus-v1.json"
     _corpus_write(corpus_path)
     case = module._corpus_case_list_load(corpus_path)[0]
-    plugin_source_path_by_name_map = _plugin_source_path_by_name_map_create(
+    plugin_source_binding_by_name_map = _plugin_source_binding_by_name_map_create(
+        module,
         tmp_path,
         {
             "agent-workflows": ["code-audit"],
@@ -1517,7 +1651,7 @@ def test_case_evaluate_reports_missing_and_forbidden_activations(
             model="gpt-5.6-sol",
             reasoning_effort="medium",
         ),
-        plugin_source_path_by_name_map=plugin_source_path_by_name_map,
+        plugin_source_binding_by_name_map=plugin_source_binding_by_name_map,
         model_call=lambda *_args: next(payload_list),
     )
 
@@ -1555,7 +1689,8 @@ def test_case_evaluate_rejects_bare_ambient_activation(tmp_path: Path) -> None:
                 model="gpt-5.6-sol",
                 reasoning_effort="medium",
             ),
-            plugin_source_path_by_name_map=_plugin_source_path_by_name_map_create(
+            plugin_source_binding_by_name_map=_plugin_source_binding_by_name_map_create(
+                module,
                 tmp_path,
                 {"project-standards": []},
             ),
@@ -1596,7 +1731,8 @@ def test_case_evaluate_rejects_nonexistent_qualified_skill(tmp_path: Path) -> No
                 model="gpt-5.6-sol",
                 reasoning_effort="medium",
             ),
-            plugin_source_path_by_name_map=_plugin_source_path_by_name_map_create(
+            plugin_source_binding_by_name_map=_plugin_source_binding_by_name_map_create(
+                module,
                 tmp_path,
                 {"project-standards": []},
             ),
@@ -1645,7 +1781,7 @@ def test_case_evaluate_rejects_qualified_activated_provider_omitted_from_source_
                 model="gpt-5.6-sol",
                 reasoning_effort="medium",
             ),
-            plugin_source_path_by_name_map={},
+            plugin_source_binding_by_name_map={},
             model_call=_model_call,
         )
 
@@ -1682,7 +1818,8 @@ def test_case_evaluate_accepts_exact_activated_provider_binding(tmp_path: Path) 
         ]
     )
 
-    plugin_source_path_by_name_map = _plugin_source_path_by_name_map_create(
+    plugin_source_binding_by_name_map = _plugin_source_binding_by_name_map_create(
+        module,
         tmp_path,
         {"workflow-container-agent-tools": ["workflow-container-developer"]},
     )
@@ -1694,7 +1831,7 @@ def test_case_evaluate_accepts_exact_activated_provider_binding(tmp_path: Path) 
             model="gpt-5.6-sol",
             reasoning_effort="medium",
         ),
-        plugin_source_path_by_name_map=plugin_source_path_by_name_map,
+        plugin_source_binding_by_name_map=plugin_source_binding_by_name_map,
         model_call=lambda *_args: next(payload_list),
     )
 
@@ -1742,7 +1879,7 @@ def test_case_evaluate_accepts_physical_project_local_skill(tmp_path: Path) -> N
             model="gpt-5.6-sol",
             reasoning_effort="medium",
         ),
-        plugin_source_path_by_name_map={},
+        plugin_source_binding_by_name_map={},
         model_call=lambda *_args: next(payload_list),
     )
 
@@ -1786,7 +1923,8 @@ def test_case_evaluate_rejects_provider_and_project_local_collision(tmp_path: Pa
                 model="gpt-5.6-sol",
                 reasoning_effort="medium",
             ),
-            plugin_source_path_by_name_map=_plugin_source_path_by_name_map_create(
+            plugin_source_binding_by_name_map=_plugin_source_binding_by_name_map_create(
+                module,
                 tmp_path,
                 {"provider-a": ["shared"]},
             ),
@@ -1828,7 +1966,8 @@ def test_case_evaluate_accepts_no_activation_with_no_required_provider(tmp_path:
             model="gpt-5.6-sol",
             reasoning_effort="medium",
         ),
-        plugin_source_path_by_name_map=_plugin_source_path_by_name_map_create(
+        plugin_source_binding_by_name_map=_plugin_source_binding_by_name_map_create(
+            module,
             tmp_path,
             {"project-standards": []},
         ),
@@ -1837,6 +1976,84 @@ def test_case_evaluate_accepts_no_activation_with_no_required_provider(tmp_path:
 
     assert result.passed is True
     assert result.activated_skill_list == ()
+
+
+@pytest.mark.parametrize("binding_side", ["source", "cache"])
+@pytest.mark.parametrize("invocation_stage", ["generation", "judge"])
+def test_case_evaluate_rejects_provider_binding_drift_between_stages(
+    binding_side: str,
+    invocation_stage: str,
+    tmp_path: Path,
+) -> None:
+    """Source and cache drift around either invocation becomes typed non-acceptance.
+
+    Args:
+        binding_side: Provider tree mutated by the model-call fixture.
+        invocation_stage: Invocation after which the binding changes.
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    corpus_path = tmp_path / "skill_behavior_eval/corpus-v1.json"
+    corpus_path.parent.mkdir()
+    _corpus_write(corpus_path)
+    case = module._corpus_case_list_load(corpus_path)[0]
+    plugin_source_binding_by_name_map = _plugin_source_binding_by_name_map_create(
+        module,
+        tmp_path,
+        {
+            "agent-workflows": ["code-audit"],
+            "project-standards": ["python-developer"],
+        },
+    )
+    invocation_count = 0
+
+    def _model_call(*_args: Any) -> Any:
+        """Return one valid result after applying the selected deterministic drift."""
+
+        nonlocal invocation_count
+        invocation_count += 1
+        current_stage = "generation" if invocation_count == 1 else "judge"
+        if current_stage == invocation_stage:
+            binding = plugin_source_binding_by_name_map["project-standards"]
+            binding_path = binding.source_path if binding_side == "source" else binding.cache_path
+            (binding_path / "SKILL.md").write_text("drifted\n", encoding="utf-8")
+        if current_stage == "generation":
+            return module.ModelInvocationResult(
+                payload={
+                    "activated_skill_list": ["project-standards:python-developer"],
+                    "response": "Read-only response.",
+                },
+                usage=module.CodexUsage(**_codex_usage_payload()),
+            )
+        return module.ModelInvocationResult(
+            payload={
+                "invariant_result_list": [
+                    {"id": "bounded", "passed": True, "reason": "The response remains read-only."}
+                ]
+            },
+            usage=module.CodexUsage(**_codex_usage_payload(2)),
+        )
+
+    with pytest.raises(module.SkillBehaviorCaseEvaluationError) as error_info:
+        module._case_evaluate(
+            case,
+            invocation_config=module.ModelInvocationConfig(
+                codex_bin="codex",
+                model="gpt-5.6-sol",
+                reasoning_effort="medium",
+            ),
+            plugin_source_binding_by_name_map=plugin_source_binding_by_name_map,
+            model_call=_model_call,
+        )
+
+    failure = error_info.value.failure
+    assert failure.error_code == f"{invocation_stage}-validation-failed"
+    assert failure.codex_usage_generation == module.CodexUsage(**_codex_usage_payload())
+    assert failure.codex_usage_judge == (
+        module.CodexUsage(**_codex_usage_payload(2)) if invocation_stage == "judge" else None
+    )
+    assert invocation_count == (2 if invocation_stage == "judge" else 1)
 
 
 def test_activation_normalization_requires_one_unambiguous_provider_identity(
@@ -1855,14 +2072,15 @@ def test_activation_normalization_requires_one_unambiguous_provider_identity(
     _corpus_write(corpus_path)
     case = module._corpus_case_list_load(corpus_path)[0]
 
-    plugin_source_path_by_name_map = _plugin_source_path_by_name_map_create(
+    plugin_source_binding_by_name_map = _plugin_source_binding_by_name_map_create(
+        module,
         tmp_path,
         {"project-standards": ["python-developer"]},
     )
     assert module._activated_skill_tuple_resolve(
         ["python-developer"],
         case=case,
-        plugin_source_path_by_name_map=plugin_source_path_by_name_map,
+        plugin_source_binding_by_name_map=plugin_source_binding_by_name_map,
     ) == ("project-standards:python-developer",)
 
     ambiguous_case = module.SkillBehaviorCase(
@@ -1875,7 +2093,8 @@ def test_activation_normalization_requires_one_unambiguous_provider_identity(
         suite=case.suite,
         working_directory=case.working_directory,
     )
-    ambiguous_plugin_source_path_by_name_map = _plugin_source_path_by_name_map_create(
+    ambiguous_plugin_source_binding_by_name_map = _plugin_source_binding_by_name_map_create(
+        module,
         tmp_path,
         {"provider-a": ["shared"], "provider-b": ["shared"]},
     )
@@ -1883,7 +2102,7 @@ def test_activation_normalization_requires_one_unambiguous_provider_identity(
         module._activated_skill_tuple_resolve(
             ["shared"],
             case=ambiguous_case,
-            plugin_source_path_by_name_map=ambiguous_plugin_source_path_by_name_map,
+            plugin_source_binding_by_name_map=ambiguous_plugin_source_binding_by_name_map,
         )
 
 
@@ -1916,13 +2135,14 @@ def test_case_list_evaluate_preserves_corpus_order(monkeypatch: pytest.MonkeyPat
         case: Any,
         *,
         invocation_config: Any,
-        plugin_source_path_by_name_map: dict[str, Path],
+        plugin_source_binding_by_name_map: dict[str, Any],
     ) -> Any:
         """Return the second case first.
 
         Args:
             case: Case.
             invocation_config: Invocation config.
+            plugin_source_binding_by_name_map: Provider source bindings.
 
         Returns:
             The second case first.
@@ -1952,7 +2172,8 @@ def test_case_list_evaluate_preserves_corpus_order(monkeypatch: pytest.MonkeyPat
             model="gpt-5.6-sol",
             reasoning_effort="medium",
         ),
-        plugin_source_path_by_name_map=_plugin_source_path_by_name_map_create(
+        plugin_source_binding_by_name_map=_plugin_source_binding_by_name_map_create(
+            module,
             tmp_path,
             {
                 "agent-workflows": ["code-audit"],
@@ -1997,7 +2218,7 @@ def test_case_list_evaluate_drains_all_futures_into_non_acceptance_record(
         case: Any,
         *,
         invocation_config: Any,
-        plugin_source_path_by_name_map: dict[str, Path],
+        plugin_source_binding_by_name_map: dict[str, Any],
     ) -> Any:
         """Fail one case and complete the other with exact usage."""
 
@@ -2036,7 +2257,8 @@ def test_case_list_evaluate_drains_all_futures_into_non_acceptance_record(
         [first_case, second_case],
         concurrency=2,
         invocation_config=invocation_config,
-        plugin_source_path_by_name_map=_plugin_source_path_by_name_map_create(
+        plugin_source_binding_by_name_map=_plugin_source_binding_by_name_map_create(
+            module,
             tmp_path,
             {
                 "agent-workflows": ["code-audit"],
@@ -2177,7 +2399,7 @@ def test_case_list_evaluate_drains_submitted_future_after_submission_failure(
         case_list,
         concurrency=3,
         invocation_config=invocation_config,
-        plugin_source_path_by_name_map={},
+        plugin_source_binding_by_name_map={},
     )
 
     payload = evaluation_attempt.non_acceptance_payload_get(invocation_config)
@@ -2251,14 +2473,22 @@ def test_activated_provider_manifest_rejects_duplicate_identity_key(tmp_path: Pa
     """
 
     module = _module_load()
-    plugin_source_path = _plugin_source_path_create(tmp_path / "provider", "project-standards", [])
-    (plugin_source_path / ".codex-plugin/plugin.json").write_text(
-        '{"name":"project-standards","name":"other-provider","version":"0.1.0"}\n',
-        encoding="utf-8",
+    duplicate_manifest_text = '{"name":"project-standards","name":"other-provider","version":"0.1.0"}\n'
+    plugin_source_path = _plugin_source_path_create(tmp_path / "provider-source", "project-standards", [])
+    plugin_cache_path = _plugin_source_path_create(tmp_path / "provider-cache", "project-standards", [])
+    for manifest_path in (
+        plugin_source_path / ".codex-plugin/plugin.json",
+        plugin_cache_path / ".codex-plugin/plugin.json",
+    ):
+        manifest_path.write_text(duplicate_manifest_text, encoding="utf-8")
+    plugin_source_binding = module.PluginSourceBinding(
+        cache_path=plugin_cache_path,
+        file_sha256_by_relative_path_map=module._plugin_file_sha256_by_relative_path_map_get(plugin_source_path),
+        source_path=plugin_source_path,
     )
 
     with pytest.raises(module.SkillBehaviorEvalError, match="manifest is invalid"):
-        module._plugin_source_path_validate("project-standards", plugin_source_path)
+        module._plugin_source_path_validate("project-standards", plugin_source_binding)
 
     marketplace_path, standard_codex_home = _plugin_binding_fixture_create(tmp_path / "preinstalled")
     preinstalled_manifest_path = marketplace_path / "plugins/project-standards/.codex-plugin/plugin.json"
@@ -2473,6 +2703,112 @@ def test_codex_invocation_failure_extracts_usage_before_completion_validation(
 
 
 @pytest.mark.parametrize(
+    "output_text",
+    [
+        '{"activated_skill_list":[],"activated_skill_list":["other"],"response":"ok"}\n',
+        ('{"invariant_result_list":[{"id":"bounded","passed":true,' '"passed":false,"reason":"duplicate"}]}\n'),
+    ],
+    ids=["generation-root-activation", "judge-nested-invariant"],
+)
+def test_codex_invocation_rejects_duplicate_output_keys_with_usage(
+    monkeypatch: pytest.MonkeyPatch,
+    output_text: str,
+    tmp_path: Path,
+) -> None:
+    """Generated and judge output reject duplicates after retaining exact usage.
+
+    Args:
+        monkeypatch: Pytest mutation fixture.
+        output_text: Model output with one duplicate key.
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+
+    def _run(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        """Write duplicate output and return one exact completed usage event."""
+
+        output_path = Path(command[command.index("--output-last-message") + 1])
+        output_path.write_text(output_text, encoding="utf-8")
+        event = {"type": "turn.completed", "usage": _codex_usage_payload()}
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(event) + "\n", stderr="")
+
+    monkeypatch.setattr(module, "_standard_codex_process_environment_get", lambda: {"HOME": "/home/test-user"})
+    monkeypatch.setattr(module.subprocess, "run", _run)
+
+    with pytest.raises(module.ModelInvocationError) as error_info:
+        module._codex_payload_get(
+            "prompt",
+            tmp_path,
+            {"type": "object"},
+            module.ModelInvocationConfig(codex_bin="codex", model="gpt-5.6-sol", reasoning_effort="max"),
+        )
+
+    assert error_info.value.failure.error_code == "codex-output-invalid"
+    assert error_info.value.failure.usage == module.CodexUsage(**_codex_usage_payload())
+
+
+@pytest.mark.parametrize("failure_stage", ["generation", "judge"])
+def test_case_evaluate_closes_invalid_utf8_output_with_stage_usage(
+    failure_stage: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Invalid UTF-8 generation and judge output retain already extracted usage.
+
+    Args:
+        failure_stage: Model stage that emits invalid UTF-8.
+        monkeypatch: Pytest mutation fixture.
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    corpus_path = tmp_path / "skill_behavior_eval/corpus-v1.json"
+    corpus_path.parent.mkdir()
+    _corpus_write(corpus_path, expected_skill_list=[], forbidden_skill_list=[])
+    case = module._corpus_case_list_load(corpus_path)[0]
+    invocation_count = 0
+
+    def _run(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        """Write valid generation or invalid selected-stage output with exact usage."""
+
+        nonlocal invocation_count
+        invocation_count += 1
+        current_stage = "generation" if invocation_count == 1 else "judge"
+        output_path = Path(command[command.index("--output-last-message") + 1])
+        if current_stage == failure_stage:
+            output_path.write_bytes(b"\xff")
+        else:
+            output_path.write_text(
+                '{"activated_skill_list":[],"response":"Read-only response."}\n',
+                encoding="utf-8",
+            )
+        event = {"type": "turn.completed", "usage": _codex_usage_payload(invocation_count)}
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(event) + "\n", stderr="")
+
+    monkeypatch.setattr(module, "_standard_codex_process_environment_get", lambda: {"HOME": "/home/test-user"})
+    monkeypatch.setattr(module.subprocess, "run", _run)
+
+    with pytest.raises(module.SkillBehaviorCaseEvaluationError) as error_info:
+        module._case_evaluate(
+            case,
+            invocation_config=module.ModelInvocationConfig(
+                codex_bin="codex",
+                model="gpt-5.6-sol",
+                reasoning_effort="medium",
+            ),
+            plugin_source_binding_by_name_map={},
+        )
+
+    failure = error_info.value.failure
+    assert failure.error_code == "codex-output-invalid"
+    assert failure.codex_usage_generation == module.CodexUsage(**_codex_usage_payload())
+    assert failure.codex_usage_judge == (
+        module.CodexUsage(**_codex_usage_payload(2)) if failure_stage == "judge" else None
+    )
+
+
+@pytest.mark.parametrize(
     ("failure_stage", "error_code"),
     [("generation", "codex-process-failed"), ("judge", "codex-output-invalid")],
 )
@@ -2529,7 +2865,7 @@ def test_case_evaluate_carries_typed_invocation_usage_for_each_model_stage(
                 model="gpt-5.6-sol",
                 reasoning_effort="medium",
             ),
-            plugin_source_path_by_name_map={},
+            plugin_source_binding_by_name_map={},
             model_call=_model_call,
         )
 
@@ -2597,7 +2933,7 @@ def test_non_acceptance_surfaces_redact_raw_codex_streams(
         [case],
         concurrency=1,
         invocation_config=invocation_config,
-        plugin_source_path_by_name_map={},
+        plugin_source_binding_by_name_map={},
     )
     payload = evaluation_attempt.non_acceptance_payload_get(invocation_config)
     output_path = tmp_path / "non-acceptance.json"
@@ -2656,6 +2992,31 @@ def test_codex_usage_requires_one_exact_structured_completion_event(
         module._codex_usage_get(event_jsonl)
 
 
+@pytest.mark.parametrize(
+    "event_jsonl",
+    [
+        '{"type":"turn.completed","type":"turn.completed","usage":{}}',
+        (
+            '{"type":"turn.completed","usage":{"cached_input_tokens":2,'
+            '"cache_write_input_tokens":3,"input_tokens":10,"input_tokens":11,'
+            '"output_tokens":5,"reasoning_output_tokens":4}}'
+        ),
+    ],
+    ids=["event-root", "usage-nested"],
+)
+def test_codex_usage_rejects_duplicate_jsonl_keys(event_jsonl: str) -> None:
+    """Codex JSONL event and nested usage objects reject duplicate keys.
+
+    Args:
+        event_jsonl: One event line with a duplicate object key.
+    """
+
+    module = _module_load()
+
+    with pytest.raises(module.SkillBehaviorEvalError, match="invalid JSON"):
+        module._codex_usage_get(event_jsonl)
+
+
 def test_preinstalled_plugin_binding_accepts_exact_server_cache(tmp_path: Path) -> None:
     """Evaluation accepts one exact source already prepared in the standard home."""
 
@@ -2667,16 +3028,19 @@ def test_preinstalled_plugin_binding_accepts_exact_server_cache(tmp_path: Path) 
         forbidden_skill_list=["project-standards:pytest-developer"],
     )
 
-    plugin_source_path_by_name_map = module._preinstalled_plugin_source_binding_validate(
+    plugin_source_binding_by_name_map = module._preinstalled_plugin_source_binding_validate(
         case_list=module._selected_case_list_get(case_id_list=[], corpus_path_list=[corpus_path]),
         marketplace_path_list=[marketplace_path],
         plugin_selector_list=["project-standards@provider-marketplace"],
         standard_codex_home=standard_codex_home,
     )
 
-    assert plugin_source_path_by_name_map == {
-        "project-standards": (marketplace_path / "plugins/project-standards").resolve()
-    }
+    binding = plugin_source_binding_by_name_map["project-standards"]
+    assert binding.source_path == (marketplace_path / "plugins/project-standards").resolve()
+    assert binding.cache_path == next(standard_codex_home.glob("plugins/cache/*/*/*")).resolve()
+    assert binding.file_sha256_by_relative_path_map == module._plugin_file_sha256_by_relative_path_map_get(
+        binding.source_path
+    )
 
 
 def test_preinstalled_plugin_binding_ignores_runtime_bytecode_cache(
@@ -2852,13 +3216,23 @@ def test_activated_provider_binding_rejects_mismatched_and_ambiguous_sources(tmp
             ]
         )
     with pytest.raises(module.SkillBehaviorEvalError, match="identity is mismatched"):
+        source_path = _plugin_source_path_create(
+            tmp_path / "mismatched-provider-source",
+            "agent-workflows",
+            ["python-developer"],
+        )
+        cache_path = _plugin_source_path_create(
+            tmp_path / "mismatched-provider-cache",
+            "agent-workflows",
+            ["python-developer"],
+        )
         module._qualified_activated_skill_resolve(
             "project-standards:python-developer",
-            plugin_source_path_by_name_map={
-                "project-standards": _plugin_source_path_create(
-                    tmp_path / "mismatched-provider",
-                    "agent-workflows",
-                    ["python-developer"],
+            plugin_source_binding_by_name_map={
+                "project-standards": module.PluginSourceBinding(
+                    cache_path=cache_path,
+                    file_sha256_by_relative_path_map=module._plugin_file_sha256_by_relative_path_map_get(source_path),
+                    source_path=source_path,
                 )
             },
         )
