@@ -217,6 +217,7 @@ class PluginSourceBinding:
 
     cache_path: Path
     file_sha256_by_relative_path_map: Mapping[str, str]
+    marketplace_worktree_root: Path
     source_path: Path
 
     def __post_init__(self) -> None:
@@ -235,6 +236,16 @@ class PluginSourceBinding:
             plugin_name: Provider identity owned by this binding.
         """
 
+        try:
+            marketplace_worktree_root = _physical_git_worktree_root_get(
+                self.marketplace_worktree_root,
+                context=f"provider marketplace binding drifted: {plugin_name}",
+            )
+            self.source_path.relative_to(marketplace_worktree_root)
+        except (OSError, SkillBehaviorEvalError, ValueError) as error:
+            raise SkillBehaviorEvalError(f"provider source binding drifted: {plugin_name}") from error
+        if marketplace_worktree_root != self.marketplace_worktree_root:
+            raise SkillBehaviorEvalError(f"provider source binding drifted: {plugin_name}")
         for path in (self.source_path, self.cache_path):
             try:
                 resolved_path = path.resolve(strict=True)
@@ -1198,8 +1209,22 @@ def _corpus_case_list_load(
 
     raw_corpus_path = corpus_path.expanduser()
     resolved_corpus_path = raw_corpus_path.resolve()
-    if Path(os.path.abspath(raw_corpus_path)) != resolved_corpus_path or raw_corpus_path.is_symlink():
+    if (
+        Path(os.path.abspath(raw_corpus_path)) != resolved_corpus_path
+        or raw_corpus_path.is_symlink()
+        or not resolved_corpus_path.is_file()
+    ):
         raise SkillBehaviorEvalError(f"behavior corpus must be one physical path: {raw_corpus_path}")
+    corpus_worktree_root = _physical_git_worktree_root_get(
+        resolved_corpus_path.parent,
+        context=f"behavior corpus {resolved_corpus_path}: cannot identify the corpus worktree",
+    )
+    try:
+        resolved_corpus_path.relative_to(corpus_worktree_root)
+    except ValueError as error:
+        raise SkillBehaviorEvalError(
+            f"behavior corpus {resolved_corpus_path}: path escapes its physical Git worktree"
+        ) from error
     try:
         payload = _json_duplicate_rejecting_load(
             resolved_corpus_path.read_text(encoding="utf-8"),
@@ -1664,10 +1689,33 @@ def _preinstalled_plugin_source_binding_validate(
     ):
         raise SkillBehaviorEvalError("the standard Codex plugin cache root must be one physical directory")
 
+    marketplace_worktree_root_by_name_map: dict[str, Path] = {}
     resolved_marketplace_path_list: list[Path] = []
     plugin_source_path_by_name_by_marketplace_name_map: dict[str, dict[str, Path]] = {}
     for marketplace_path in marketplace_path_list:
-        resolved_marketplace_path = marketplace_path.expanduser().resolve()
+        raw_marketplace_path = marketplace_path.expanduser()
+        try:
+            resolved_marketplace_path = raw_marketplace_path.resolve(strict=True)
+        except OSError as error:
+            raise SkillBehaviorEvalError(f"plugin marketplace is unavailable: {raw_marketplace_path}") from error
+        absolute_marketplace_path = Path(os.path.abspath(raw_marketplace_path))
+        if (
+            raw_marketplace_path != absolute_marketplace_path
+            or absolute_marketplace_path != resolved_marketplace_path
+            or raw_marketplace_path.is_symlink()
+            or not resolved_marketplace_path.is_dir()
+        ):
+            raise SkillBehaviorEvalError(
+                f"plugin marketplace must be one physical canonical path: {raw_marketplace_path}"
+            )
+        marketplace_worktree_root = _physical_git_worktree_root_get(
+            resolved_marketplace_path,
+            context=f"plugin marketplace {resolved_marketplace_path}",
+        )
+        if marketplace_worktree_root != resolved_marketplace_path:
+            raise SkillBehaviorEvalError(
+                f"plugin marketplace path must be exactly one registered Git worktree: {resolved_marketplace_path}"
+            )
         marketplace_manifest_path = resolved_marketplace_path / ".agents/plugins/marketplace.json"
         if not marketplace_manifest_path.is_file():
             raise SkillBehaviorEvalError(
@@ -1706,6 +1754,7 @@ def _preinstalled_plugin_source_binding_validate(
         _plugin_identity_validate(normalized_marketplace_name, label="plugin marketplace name")
         if normalized_marketplace_name in plugin_source_path_by_name_by_marketplace_name_map:
             raise SkillBehaviorEvalError(f"duplicate plugin marketplace name: {normalized_marketplace_name}")
+        marketplace_worktree_root_by_name_map[normalized_marketplace_name] = marketplace_worktree_root
         plugin_source_path_by_name_map: dict[str, Path] = {}
         for plugin in plugin_list:
             plugin_name = plugin["name"]
@@ -1783,6 +1832,7 @@ def _preinstalled_plugin_source_binding_validate(
         plugin_source_binding = PluginSourceBinding(
             cache_path=cached_plugin_path,
             file_sha256_by_relative_path_map=file_sha256_by_relative_path_map,
+            marketplace_worktree_root=marketplace_worktree_root_by_name_map[marketplace_name],
             source_path=plugin_source_path,
         )
         plugin_source_binding.validate(plugin_name=plugin_name)

@@ -769,8 +769,10 @@ def _plugin_source_binding_by_name_map_create(
 
     plugin_source_binding_by_name_map = {}
     for plugin_name, skill_name_list in skill_name_list_by_plugin_name_map.items():
+        marketplace_worktree_root = root / f"marketplace-{plugin_name}"
+        _repository_create(marketplace_worktree_root)
         source_path = _plugin_source_path_create(
-            root / f"provider-{plugin_name}",
+            marketplace_worktree_root / f"plugins/{plugin_name}",
             plugin_name,
             skill_name_list,
         )
@@ -782,6 +784,7 @@ def _plugin_source_binding_by_name_map_create(
         plugin_source_binding_by_name_map[plugin_name] = module.PluginSourceBinding(
             cache_path=cache_path,
             file_sha256_by_relative_path_map=module._plugin_file_sha256_by_relative_path_map_get(source_path),
+            marketplace_worktree_root=marketplace_worktree_root.resolve(),
             source_path=source_path,
         )
     return plugin_source_binding_by_name_map
@@ -1150,6 +1153,68 @@ def test_case_selection_does_not_resolve_unselected_runtime_root(
     assert [case.id for case in selected] == ["case-a"]
     with pytest.raises(module.SkillBehaviorEvalError):
         module._selected_case_list_get(case_id_list=[], corpus_path_list=[corpus_path])
+
+
+@pytest.mark.parametrize("list_mode", [False, True], ids=["model", "list"])
+@pytest.mark.parametrize("owner_kind", ["non-git", "copied-worktree"])
+def test_filtered_multi_corpus_rejects_every_unselected_corpus_owner(
+    capsys: pytest.CaptureFixture[str],
+    list_mode: bool,
+    owner_kind: str,
+    tmp_path: Path,
+) -> None:
+    """Filtering defers evaluated projects but never a supplied corpus Git owner.
+
+    Args:
+        capsys: Pytest output capture fixture.
+        list_mode: Whether to exercise deterministic list mode.
+        owner_kind: Invalid unselected corpus owner shape.
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    selected_repository = tmp_path / "selected-repository"
+    _repository_create(selected_repository)
+    selected_corpus_path = selected_repository / "skill_behavior_eval/corpus-v1.json"
+    selected_corpus_path.parent.mkdir()
+    _corpus_write(selected_corpus_path, expected_skill_list=[], forbidden_skill_list=[])
+
+    if owner_kind == "non-git":
+        invalid_corpus_path = tmp_path / "non-git/skill_behavior_eval/corpus-v1.json"
+        invalid_corpus_path.parent.mkdir(parents=True)
+        invalid_corpus_path.write_bytes(selected_corpus_path.read_bytes())
+        error_pattern = "corpus worktree"
+    else:
+        source_repository = tmp_path / "source-repository"
+        _repository_create(source_repository)
+        linked_worktree = tmp_path / "linked-worktree"
+        _git_run(source_repository, ["worktree", "add", "-b", "feature", str(linked_worktree), "HEAD"])
+        linked_corpus_path = linked_worktree / "skill_behavior_eval/corpus-v1.json"
+        linked_corpus_path.parent.mkdir()
+        _corpus_write(linked_corpus_path, expected_skill_list=[], forbidden_skill_list=[])
+        copied_worktree = tmp_path / "copied-worktree"
+        shutil.copytree(linked_worktree, copied_worktree)
+        invalid_corpus_path = copied_worktree / "skill_behavior_eval/corpus-v1.json"
+        error_pattern = "exactly one registered worktree"
+    invalid_payload = json.loads(invalid_corpus_path.read_text(encoding="utf-8"))
+    invalid_payload["suite"] = "unselected-provider"
+    invalid_payload["case_list"][0]["id"] = "unselected-case"
+    invalid_corpus_path.write_text(json.dumps(invalid_payload), encoding="utf-8")
+    argument_list = [
+        "--corpus",
+        str(selected_corpus_path),
+        "--corpus",
+        str(invalid_corpus_path),
+        "--case",
+        "provider:case-a",
+    ]
+    if list_mode:
+        argument_list.append("--list")
+
+    return_code = module.main(argument_list)
+
+    assert return_code == 2
+    assert error_pattern in capsys.readouterr().out
 
 
 def test_corpus_load_rejects_boolean_schema_version(tmp_path: Path) -> None:
@@ -1553,6 +1618,7 @@ def test_corpus_load_normalizes_invalid_utf8(tmp_path: Path) -> None:
     """
 
     module = _module_load()
+    _repository_create(tmp_path)
     corpus_path = tmp_path / "corpus-v1.json"
     corpus_path.write_bytes(b"\xff")
 
@@ -1582,6 +1648,7 @@ def test_corpus_load_rejects_duplicate_json_keys(corpus_text: str, tmp_path: Pat
     """
 
     module = _module_load()
+    _repository_create(tmp_path)
     corpus_path = tmp_path / "corpus-v1.json"
     corpus_path.write_text(corpus_text, encoding="utf-8")
 
@@ -2631,7 +2698,9 @@ def _plugin_binding_fixture_create(
 ) -> tuple[Path, Path]:
     """Create one source marketplace and matching server-prepared cache fixture."""
 
+    tmp_path.mkdir(parents=True, exist_ok=True)
     marketplace_path = tmp_path / "provider-worktree"
+    _repository_create(marketplace_path)
     plugin_source = source or {"source": "local", "path": f"./plugins/{plugin_name}"}
     marketplace_manifest_path = marketplace_path / ".agents/plugins/marketplace.json"
     marketplace_manifest_path.parent.mkdir(parents=True)
@@ -2682,7 +2751,13 @@ def test_activated_provider_manifest_rejects_duplicate_identity_key(tmp_path: Pa
 
     module = _module_load()
     duplicate_manifest_text = '{"name":"project-standards","name":"other-provider","version":"0.1.0"}\n'
-    plugin_source_path = _plugin_source_path_create(tmp_path / "provider-source", "project-standards", [])
+    marketplace_worktree_root = tmp_path / "provider-marketplace"
+    _repository_create(marketplace_worktree_root)
+    plugin_source_path = _plugin_source_path_create(
+        marketplace_worktree_root / "plugins/project-standards",
+        "project-standards",
+        [],
+    )
     plugin_cache_path = _plugin_source_path_create(tmp_path / "provider-cache", "project-standards", [])
     for manifest_path in (
         plugin_source_path / ".codex-plugin/plugin.json",
@@ -2692,6 +2767,7 @@ def test_activated_provider_manifest_rejects_duplicate_identity_key(tmp_path: Pa
     plugin_source_binding = module.PluginSourceBinding(
         cache_path=plugin_cache_path,
         file_sha256_by_relative_path_map=module._plugin_file_sha256_by_relative_path_map_get(plugin_source_path),
+        marketplace_worktree_root=marketplace_worktree_root.resolve(),
         source_path=plugin_source_path,
     )
 
@@ -3260,11 +3336,55 @@ def test_preinstalled_plugin_binding_accepts_exact_server_cache(tmp_path: Path) 
     )
 
     binding = plugin_source_binding_by_name_map["project-standards"]
+    assert binding.marketplace_worktree_root == marketplace_path.resolve()
     assert binding.source_path == (marketplace_path / "plugins/project-standards").resolve()
     assert binding.cache_path == next(standard_codex_home.glob("plugins/cache/*/*/*")).resolve()
     assert binding.file_sha256_by_relative_path_map == module._plugin_file_sha256_by_relative_path_map_get(
         binding.source_path
     )
+
+
+@pytest.mark.parametrize("owner_kind", ["non-git", "copied-worktree", "symlink", "noncanonical"])
+def test_preinstalled_plugin_binding_rejects_invalid_marketplace_worktree_owner(
+    owner_kind: str,
+    tmp_path: Path,
+) -> None:
+    """A marketplace path must itself be one physical registered Git worktree.
+
+    Args:
+        owner_kind: Invalid marketplace owner shape.
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    marketplace_path, standard_codex_home = _plugin_binding_fixture_create(tmp_path)
+    if owner_kind == "non-git":
+        (marketplace_path / ".git").rename(tmp_path / "removed-git-directory")
+        supplied_marketplace_path = marketplace_path
+        error_pattern = "plugin marketplace"
+    elif owner_kind == "copied-worktree":
+        _git_run(marketplace_path, ["add", "."])
+        _git_run(marketplace_path, ["commit", "-m", "Add marketplace fixture"])
+        linked_worktree = tmp_path / "linked-marketplace"
+        _git_run(marketplace_path, ["worktree", "add", "-b", "feature", str(linked_worktree), "HEAD"])
+        supplied_marketplace_path = tmp_path / "copied-marketplace"
+        shutil.copytree(linked_worktree, supplied_marketplace_path)
+        error_pattern = "registered worktree"
+    elif owner_kind == "symlink":
+        supplied_marketplace_path = tmp_path / "symbolic-marketplace"
+        supplied_marketplace_path.symlink_to(marketplace_path, target_is_directory=True)
+        error_pattern = "physical canonical path"
+    else:
+        supplied_marketplace_path = marketplace_path / ".." / marketplace_path.name
+        error_pattern = "physical canonical path"
+
+    with pytest.raises(module.SkillBehaviorEvalError, match=error_pattern):
+        module._preinstalled_plugin_source_binding_validate(
+            case_list=[],
+            marketplace_path_list=[supplied_marketplace_path],
+            plugin_selector_list=["project-standards@provider-marketplace"],
+            standard_codex_home=standard_codex_home,
+        )
 
 
 def test_preinstalled_plugin_binding_ignores_runtime_bytecode_cache(
@@ -3440,8 +3560,10 @@ def test_activated_provider_binding_rejects_mismatched_and_ambiguous_sources(tmp
             ]
         )
     with pytest.raises(module.SkillBehaviorEvalError, match="identity is mismatched"):
+        marketplace_worktree_root = tmp_path / "mismatched-marketplace"
+        _repository_create(marketplace_worktree_root)
         source_path = _plugin_source_path_create(
-            tmp_path / "mismatched-provider-source",
+            marketplace_worktree_root / "plugins/agent-workflows",
             "agent-workflows",
             ["python-developer"],
         )
@@ -3456,6 +3578,7 @@ def test_activated_provider_binding_rejects_mismatched_and_ambiguous_sources(tmp
                 "project-standards": module.PluginSourceBinding(
                     cache_path=cache_path,
                     file_sha256_by_relative_path_map=module._plugin_file_sha256_by_relative_path_map_get(source_path),
+                    marketplace_worktree_root=marketplace_worktree_root.resolve(),
                     source_path=source_path,
                 )
             },
