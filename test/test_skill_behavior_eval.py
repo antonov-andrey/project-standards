@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -92,9 +94,7 @@ def _acceptance_result_payload(
                 "forbidden_activated_skill_list": [],
                 "suite": case_id.split(":", maxsplit=1)[0],
                 "id": case_id.split(":", maxsplit=1)[1],
-                "missing_expected_skill_list": (
-                    ["provider:required-skill"] if case_id in failed_case_id_set else []
-                ),
+                "missing_expected_skill_list": (["provider:required-skill"] if case_id in failed_case_id_set else []),
                 "passed": case_id not in failed_case_id_set,
                 "response": "deterministic fixture response",
                 "semantic_invariant_result_list": [
@@ -559,9 +559,7 @@ def test_runner_rejects_existing_output_before_reading_corpus(tmp_path: Path) ->
     output_path = tmp_path / "result.json"
     output_path.write_text("immutable\n", encoding="utf-8")
 
-    return_code = module.main(
-        ["--corpus", str(tmp_path / "missing.json"), "--output", str(output_path)]
-    )
+    return_code = module.main(["--corpus", str(tmp_path / "missing.json"), "--output", str(output_path)])
 
     assert return_code == 2
     assert output_path.read_text(encoding="utf-8") == "immutable\n"
@@ -581,6 +579,10 @@ def _corpus_write(
         forbidden_skill_list: Forbidden skill list.
     """
 
+    repository = path.parent.parent if path.parent.name == "skill_behavior_eval" else path.parent
+    if not (repository / ".git").exists():
+        _repository_create(repository)
+    working_directory = ".." if path.parent.name == "skill_behavior_eval" else "."
     path.write_text(
         json.dumps(
             {
@@ -589,11 +591,17 @@ def _corpus_write(
                 "case_list": [
                     {
                         "id": "case-a",
-                        "working_directory": "..",
+                        "working_directory": working_directory,
                         "working_directory_mode": "same-branch",
                         "prompt": "Review one Python function.",
-                        "expected_skill_list": expected_skill_list or ["project-standards:python-developer"],
-                        "forbidden_skill_list": forbidden_skill_list or ["agent-workflows:code-audit"],
+                        "expected_skill_list": (
+                            ["project-standards:python-developer"]
+                            if expected_skill_list is None
+                            else expected_skill_list
+                        ),
+                        "forbidden_skill_list": (
+                            ["agent-workflows:code-audit"] if forbidden_skill_list is None else forbidden_skill_list
+                        ),
                         "semantic_invariant_list": [
                             {
                                 "id": "bounded",
@@ -605,6 +613,444 @@ def _corpus_write(
             }
         ),
         encoding="utf-8",
+    )
+
+
+def test_runner_publishes_non_acceptance_attempt_after_case_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A failed submitted case publishes telemetry only through the non-acceptance schema.
+
+    Args:
+        monkeypatch: Pytest mutation fixture.
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    corpus_path = tmp_path / "skill_behavior_eval/corpus-v1.json"
+    corpus_path.parent.mkdir()
+    _corpus_write(corpus_path, expected_skill_list=[], forbidden_skill_list=[])
+    output_path = tmp_path / "non-acceptance.json"
+    failure = module.SkillBehaviorCaseFailure(
+        codex_usage_generation=module.CodexUsage(**_codex_usage_payload()),
+        codex_usage_judge=None,
+        error_code="generation-validation-failed",
+        error_message="Generation result validation failed.",
+        id="case-a",
+        suite="provider",
+    )
+    evaluation_attempt = module.SkillBehaviorEvaluationAttempt(
+        case_attempt_list=(module.SkillBehaviorCaseAttempt(failure=failure, result=None),)
+    )
+    monkeypatch.setattr(module, "_preinstalled_plugin_source_binding_validate", lambda **_kwargs: {})
+    monkeypatch.setattr(module, "_case_list_evaluate", lambda *_args, **_kwargs: evaluation_attempt)
+
+    return_code = module.main(["--corpus", str(corpus_path), "--output", str(output_path)])
+
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert return_code == 2
+    assert payload["record_type"] == "skill-behavior-evaluation-non-acceptance"
+    assert payload["case_usage_list"][0]["codex_usage_generation"] == _codex_usage_payload()
+    assert payload["case_usage_list"][0]["codex_usage_judge"] is None
+    acceptance_module = _acceptance_module_load()
+    with pytest.raises(acceptance_module.SkillBehaviorAcceptanceError):
+        acceptance_module.acceptance_state_get([payload])
+
+
+def test_runner_revalidates_provider_binding_before_publication(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Publication-time source drift becomes typed non-acceptance with full usage.
+
+    Args:
+        monkeypatch: Pytest mutation fixture.
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    corpus_path = tmp_path / "skill_behavior_eval/corpus-v1.json"
+    corpus_path.parent.mkdir()
+    _corpus_write(corpus_path, expected_skill_list=[], forbidden_skill_list=[])
+    output_path = tmp_path / "non-acceptance.json"
+    plugin_source_binding_by_name_map = _plugin_source_binding_by_name_map_create(
+        module,
+        tmp_path,
+        {"project-standards": []},
+    )
+    result = module.SkillBehaviorCaseResult(
+        activated_skill_list=(),
+        codex_usage_generation=module.CodexUsage(**_codex_usage_payload()),
+        codex_usage_judge=module.CodexUsage(**_codex_usage_payload(2)),
+        forbidden_activated_skill_list=(),
+        id="case-a",
+        missing_expected_skill_list=(),
+        passed=True,
+        response="Read-only response.",
+        semantic_invariant_result_list=(),
+        suite="provider",
+    )
+    evaluation_attempt = module.SkillBehaviorEvaluationAttempt(
+        case_attempt_list=(module.SkillBehaviorCaseAttempt(failure=None, result=result),)
+    )
+
+    def _case_list_evaluate(*_args: Any, **_kwargs: Any) -> Any:
+        """Mutate the source after evaluation but before publication."""
+
+        binding = plugin_source_binding_by_name_map["project-standards"]
+        (binding.source_path / "SKILL.md").write_text("publication drift\n", encoding="utf-8")
+        return evaluation_attempt
+
+    monkeypatch.setattr(module, "_standard_codex_process_environment_get", lambda: {"HOME": str(tmp_path)})
+    monkeypatch.setattr(
+        module,
+        "_preinstalled_plugin_source_binding_validate",
+        lambda **_kwargs: plugin_source_binding_by_name_map,
+    )
+    monkeypatch.setattr(module, "_case_list_evaluate", _case_list_evaluate)
+
+    return_code = module.main(["--corpus", str(corpus_path), "--output", str(output_path)])
+
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert return_code == 2
+    assert payload["case_usage_list"][0]["error_code"] == "provider-binding-drift"
+    assert payload["case_usage_list"][0]["codex_usage_generation"] == _codex_usage_payload()
+    assert payload["case_usage_list"][0]["codex_usage_judge"] == _codex_usage_payload(2)
+
+
+@pytest.mark.parametrize("drift_kind", ["marketplace-name", "plugin-source"])
+def test_runner_rejects_marketplace_declaration_drift_before_publication(
+    drift_kind: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Publication reproof compares the retained marketplace declaration.
+
+    Args:
+        drift_kind: Marketplace identity or selected plugin-source drift.
+        monkeypatch: Pytest mutation fixture.
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    corpus_path = tmp_path / "skill_behavior_eval/corpus-v1.json"
+    corpus_path.parent.mkdir()
+    _corpus_write(corpus_path, expected_skill_list=[], forbidden_skill_list=[])
+    output_path = tmp_path / "non-acceptance.json"
+    plugin_source_binding_by_name_map = _plugin_source_binding_by_name_map_create(
+        module,
+        tmp_path,
+        {"project-standards": []},
+    )
+    result = module.SkillBehaviorCaseResult(
+        activated_skill_list=(),
+        codex_usage_generation=module.CodexUsage(**_codex_usage_payload()),
+        codex_usage_judge=module.CodexUsage(**_codex_usage_payload(2)),
+        forbidden_activated_skill_list=(),
+        id="case-a",
+        missing_expected_skill_list=(),
+        passed=True,
+        response="Read-only response.",
+        semantic_invariant_result_list=(),
+        suite="provider",
+    )
+    evaluation_attempt = module.SkillBehaviorEvaluationAttempt(
+        case_attempt_list=(module.SkillBehaviorCaseAttempt(failure=None, result=result),)
+    )
+
+    def _case_list_evaluate(*_args: Any, **_kwargs: Any) -> Any:
+        """Drift the manifest after judging and before publication."""
+
+        _marketplace_manifest_drift(
+            plugin_source_binding_by_name_map["project-standards"],
+            drift_kind=drift_kind,
+        )
+        return evaluation_attempt
+
+    monkeypatch.setattr(module, "_standard_codex_process_environment_get", lambda: {"HOME": str(tmp_path)})
+    monkeypatch.setattr(
+        module,
+        "_preinstalled_plugin_source_binding_validate",
+        lambda **_kwargs: plugin_source_binding_by_name_map,
+    )
+    monkeypatch.setattr(module, "_case_list_evaluate", _case_list_evaluate)
+
+    return_code = module.main(["--corpus", str(corpus_path), "--output", str(output_path)])
+
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert return_code == 2
+    assert payload["case_usage_list"][0]["error_code"] == "provider-binding-drift"
+    assert payload["case_usage_list"][0]["codex_usage_generation"] == _codex_usage_payload()
+    assert payload["case_usage_list"][0]["codex_usage_judge"] == _codex_usage_payload(2)
+
+
+@pytest.mark.parametrize("replacement_kind", ["symbolic", "non-git", "different-worktree"])
+def test_runner_rejects_evaluated_project_replacement_before_publication(
+    monkeypatch: pytest.MonkeyPatch,
+    replacement_kind: str,
+    tmp_path: Path,
+) -> None:
+    """Publication reproof converts every project replacement to non-acceptance.
+
+    Args:
+        monkeypatch: Pytest mutation fixture.
+        replacement_kind: Replacement owner shape.
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    project_path = tmp_path / "evaluated-project"
+    corpus_path = project_path / "skill_behavior_eval/corpus-v1.json"
+    corpus_path.parent.mkdir(parents=True)
+    _corpus_write(corpus_path, expected_skill_list=[], forbidden_skill_list=[])
+    output_path = tmp_path / "non-acceptance.json"
+    result = module.SkillBehaviorCaseResult(
+        activated_skill_list=(),
+        codex_usage_generation=module.CodexUsage(**_codex_usage_payload()),
+        codex_usage_judge=module.CodexUsage(**_codex_usage_payload(2)),
+        forbidden_activated_skill_list=(),
+        id="case-a",
+        missing_expected_skill_list=(),
+        passed=True,
+        response="Read-only response.",
+        semantic_invariant_result_list=(),
+        suite="provider",
+    )
+    evaluation_attempt = module.SkillBehaviorEvaluationAttempt(
+        case_attempt_list=(module.SkillBehaviorCaseAttempt(failure=None, result=result),)
+    )
+
+    def _case_list_evaluate(*_args: Any, **_kwargs: Any) -> Any:
+        """Replace the evaluated project after judging and before publication."""
+
+        _evaluated_project_replace(project_path, replacement_kind=replacement_kind)
+        return evaluation_attempt
+
+    monkeypatch.setattr(module, "_standard_codex_process_environment_get", lambda: {"HOME": str(tmp_path)})
+    monkeypatch.setattr(module, "_preinstalled_plugin_source_binding_validate", lambda **_kwargs: {})
+    monkeypatch.setattr(module, "_case_list_evaluate", _case_list_evaluate)
+
+    return_code = module.main(["--corpus", str(corpus_path), "--output", str(output_path)])
+
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert return_code == 2
+    assert payload["case_usage_list"][0]["error_code"] == "project-binding-drift"
+    assert payload["case_usage_list"][0]["codex_usage_generation"] == _codex_usage_payload()
+    assert payload["case_usage_list"][0]["codex_usage_judge"] == _codex_usage_payload(2)
+
+
+def _plugin_source_path_create(
+    root: Path,
+    plugin_name: str,
+    skill_name_list: list[str],
+) -> Path:
+    """Create one physical plugin source with canonical skill owners.
+
+    Args:
+        root: Exact provider source root.
+        plugin_name: Plugin provider identity.
+        skill_name_list: Canonical skill identities.
+
+    Returns:
+        Exact physical provider source root.
+    """
+
+    manifest_path = root / ".codex-plugin/plugin.json"
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text(
+        json.dumps({"name": plugin_name, "version": "0.1.0+codex.test"}) + "\n",
+        encoding="utf-8",
+    )
+    for skill_name in skill_name_list:
+        skill_path = root / f"skills/{skill_name}/SKILL.md"
+        skill_path.parent.mkdir(parents=True)
+        skill_path.write_text(
+            f"---\nname: {skill_name}\ndescription: Deterministic test skill.\n---\n",
+            encoding="utf-8",
+        )
+    return root.resolve()
+
+
+def _plugin_source_binding_by_name_map_create(
+    module: Any,
+    root: Path,
+    skill_name_list_by_plugin_name_map: dict[str, list[str]],
+) -> dict[str, Any]:
+    """Create exact source/cache bindings for each test provider.
+
+    Args:
+        module: Loaded evaluator module that owns the binding type.
+        root: Parent fixture directory.
+        skill_name_list_by_plugin_name_map: Skill identities by provider.
+
+    Returns:
+        Exact provider source/cache binding mapping.
+    """
+
+    plugin_source_binding_by_name_map = {}
+    for plugin_name, skill_name_list in skill_name_list_by_plugin_name_map.items():
+        marketplace_worktree_root = root / f"marketplace-{plugin_name}"
+        _repository_create(marketplace_worktree_root)
+        marketplace_name = f"{plugin_name}-marketplace"
+        plugin_source_declaration = {
+            "name": plugin_name,
+            "source": {"source": "local", "path": f"./plugins/{plugin_name}"},
+        }
+        marketplace_manifest_path = marketplace_worktree_root / ".agents/plugins/marketplace.json"
+        marketplace_manifest_path.parent.mkdir(parents=True)
+        marketplace_manifest_path.write_text(
+            json.dumps({"name": marketplace_name, "plugins": [plugin_source_declaration]}) + "\n",
+            encoding="utf-8",
+        )
+        source_path = _plugin_source_path_create(
+            marketplace_worktree_root / f"plugins/{plugin_name}",
+            plugin_name,
+            skill_name_list,
+        )
+        cache_path = _plugin_source_path_create(
+            root / f"cache-{plugin_name}",
+            plugin_name,
+            skill_name_list,
+        )
+        plugin_source_binding_by_name_map[plugin_name] = module.PluginSourceBinding(
+            cache_path=cache_path,
+            file_sha256_by_relative_path_map=module._plugin_file_sha256_by_relative_path_map_get(source_path),
+            marketplace_manifest_path=marketplace_manifest_path,
+            marketplace_name=marketplace_name,
+            marketplace_worktree_root=marketplace_worktree_root.resolve(),
+            plugin_source_declaration_json=json.dumps(
+                plugin_source_declaration,
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+            source_path=source_path,
+        )
+    return plugin_source_binding_by_name_map
+
+
+@pytest.mark.parametrize(
+    "frontmatter_text",
+    [
+        "---\nname: test-skill\ndescription: Missing closing delimiter.\n",
+        "---\nname: test-skill\nname: duplicate\ndescription: Duplicate key.\n---\n",
+        "---\nname: &skill-name test-skill\ndescription: Anchored value.\n---\n",
+        "---\nname: &skill-name test-skill\ndescription: *skill-name\n---\n",
+        "---\n<<: {name: test-skill}\ndescription: Merge key.\n---\n",
+        "---\nname: !!str test-skill\ndescription: Explicit tag.\n---\n",
+        "---\nname: test-skill\ndescription: Closed schema.\nunknown: rejected\n---\n",
+        "---\ndescription: Missing name.\n---\n",
+        "---\nname: test-skill\n---\n",
+        "---\nname: test-skill\ndescription: null\n---\n",
+        "---\nname: test-skill\ndescription: 01\n---\n",
+        "---\nname: test-skill\ndescription: +01\n---\n",
+        "---\nname: test-skill\ndescription: -01\n---\n",
+        "---\nname: test-skill\ndescription: 01.2\n---\n",
+        "---\nname: test-skill\ndescription: +01.2\n---\n",
+        "---\nname: test-skill\ndescription: -01.2\n---\n",
+        "---\nname: test-skill\ndescription: 01e2\n---\n",
+        "---\nname: test-skill\ndescription: +01e2\n---\n",
+        "---\nname: test-skill\ndescription: -01e2\n---\n",
+        "---\nname: '   '\ndescription: Whitespace-only name.\n---\n",
+        "---\nname: test-skill\ndescription: '   '\n---\n",
+        (
+            "---\nname: test-skill\ndescription: First document.\n...\n"
+            "--- # second document\nname: test-skill\ndescription: Second document.\n---\n"
+        ),
+    ],
+    ids=[
+        "missing-closing-delimiter",
+        "duplicate-key",
+        "anchor",
+        "alias",
+        "merge-key",
+        "tag",
+        "unknown-field",
+        "missing-name",
+        "missing-description",
+        "non-string-description",
+        "leading-zero-integer",
+        "leading-zero-integer-positive",
+        "leading-zero-integer-negative",
+        "leading-zero-float",
+        "leading-zero-float-positive",
+        "leading-zero-float-negative",
+        "leading-zero-exponent",
+        "leading-zero-exponent-positive",
+        "leading-zero-exponent-negative",
+        "whitespace-only-name",
+        "whitespace-only-description",
+        "multiple-documents",
+    ],
+)
+def test_skill_path_resolve_rejects_noncanonical_frontmatter(
+    frontmatter_text: str,
+    tmp_path: Path,
+) -> None:
+    """Physical skill resolution accepts only the authoritative closed frontmatter schema.
+
+    Args:
+        frontmatter_text: Invalid SKILL.md contents.
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    skill_path = tmp_path / "skills/test-skill/SKILL.md"
+    skill_path.parent.mkdir(parents=True)
+    skill_path.write_text(frontmatter_text, encoding="utf-8")
+
+    with pytest.raises(module.SkillBehaviorEvalError, match="SKILL.md frontmatter is invalid"):
+        module._skill_path_resolve(
+            tmp_path.resolve(),
+            Path("skills/test-skill/SKILL.md"),
+            expected_skill_name="test-skill",
+            context="test provider",
+        )
+
+
+@pytest.mark.parametrize(
+    "description",
+    [
+        "Exact schema.",
+        "yes",
+        "no",
+        "on",
+        "off",
+        "2026-08-07",
+        "2001-12-15T02:59:43.1Z",
+        "'01'",
+        "'-01'",
+        "'01.2'",
+        "'01e2'",
+        "-0o7",
+        "+0x3A",
+        "+.NaN",
+    ],
+)
+def test_skill_path_resolve_accepts_exact_frontmatter_delimiter_lines(description: str, tmp_path: Path) -> None:
+    """An exact closed frontmatter document may be followed by Markdown delimiter lines.
+
+    Args:
+        description: YAML 1.2 string scalar, including YAML 1.1 boolean and timestamp forms.
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    skill_path = tmp_path / "skills/test-skill/SKILL.md"
+    skill_path.parent.mkdir(parents=True)
+    skill_path.write_text(
+        f"---\nname: test-skill\ndescription: {description}\n---\n# Body\n\n---\n",
+        encoding="utf-8",
+    )
+
+    assert (
+        module._skill_path_resolve(
+            tmp_path.resolve(),
+            Path("skills/test-skill/SKILL.md"),
+            expected_skill_name="test-skill",
+            context="test provider",
+        )
+        == skill_path.resolve()
     )
 
 
@@ -636,7 +1082,7 @@ def _repository_create(repository: Path) -> None:
         repository: Exact Git repository root.
     """
 
-    repository.mkdir()
+    repository.mkdir(exist_ok=True)
     _git_run(repository, ["init", "-b", "main"])
     _git_run(repository, ["config", "user.email", "test@example.com"])
     _git_run(repository, ["config", "user.name", "Behavior Eval Test"])
@@ -651,12 +1097,17 @@ def test_judge_prompt_evaluates_real_mutations_as_read_only_proposed_behavior(
     """The judge cannot demand mutations that the generation sandbox explicitly forbids."""
 
     module = _module_load()
+    _repository_create(tmp_path)
     case = module.SkillBehaviorCase(
         corpus_path=tmp_path / "corpus-v1.json",
         expected_skill_list=("project-standards:project-foundation",),
         forbidden_skill_list=(),
         id="mutation-contract",
         prompt="Atomically replace the validated destination.",
+        project_evaluation_binding=module._project_evaluation_binding_get(
+            tmp_path.resolve(),
+            working_directory_mode="same-branch",
+        ),
         semantic_invariant_list=(
             module.SemanticInvariant(
                 id="atomic-replacement",
@@ -742,7 +1193,83 @@ def test_corpus_load_resolves_working_directory(tmp_path: Path) -> None:
 
     assert len(case_list) == 1
     assert case_list[0].working_directory == repository.resolve()
+    binding = case_list[0].project_evaluation_binding
+    assert binding.working_directory == repository.resolve()
+    assert binding.worktree_root == repository.resolve()
+    assert binding.git_common_directory == (repository / ".git").resolve()
+    assert binding.branch_ref == "refs/heads/main"
+    assert binding.working_directory_mode == "same-branch"
     assert case_list[0].semantic_invariant_list[0].id == "bounded"
+
+
+def test_corpus_load_rejects_non_git_owner(tmp_path: Path) -> None:
+    """A corpus cannot use one ambient non-Git directory as its owner."""
+
+    module = _module_load()
+    corpus_path = tmp_path / "corpus-v1.json"
+    corpus_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "suite": "provider",
+                "case_list": [
+                    {
+                        "id": "case-a",
+                        "working_directory": ".",
+                        "working_directory_mode": "same-branch",
+                        "prompt": "Review one Python function.",
+                        "expected_skill_list": [],
+                        "forbidden_skill_list": [],
+                        "semantic_invariant_list": [{"id": "bounded", "text": "The response remains read-only."}],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(module.SkillBehaviorEvalError, match="corpus worktree"):
+        module._corpus_case_list_load(corpus_path)
+
+
+def test_corpus_load_rejects_symbolic_owner_path(tmp_path: Path) -> None:
+    """A symbolic path cannot stand in for the physical corpus worktree owner."""
+
+    module = _module_load()
+    repository = tmp_path / "repository"
+    _repository_create(repository)
+    corpus_root = repository / "skill_behavior_eval"
+    corpus_root.mkdir()
+    corpus_path = corpus_root / "corpus-v1.json"
+    _corpus_write(corpus_path)
+    symbolic_repository = tmp_path / "symbolic-repository"
+    symbolic_repository.symlink_to(repository, target_is_directory=True)
+
+    with pytest.raises(module.SkillBehaviorEvalError, match="physical path"):
+        module._corpus_case_list_load(symbolic_repository / "skill_behavior_eval/corpus-v1.json")
+
+
+def test_corpus_load_rejects_unrepaired_copied_linked_worktree(tmp_path: Path) -> None:
+    """A copied linked worktree cannot become the physical corpus owner.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    repository = tmp_path / "repository"
+    _repository_create(repository)
+    linked_worktree = tmp_path / "linked-worktree"
+    _git_run(repository, ["worktree", "add", "-b", "feature", str(linked_worktree), "HEAD"])
+    corpus_root = linked_worktree / "skill_behavior_eval"
+    corpus_root.mkdir()
+    corpus_path = corpus_root / "corpus-v1.json"
+    _corpus_write(corpus_path)
+    copied_worktree = tmp_path / "copied-worktree"
+    shutil.copytree(linked_worktree, copied_worktree)
+
+    with pytest.raises(module.SkillBehaviorEvalError, match="exactly one registered worktree"):
+        module._corpus_case_list_load(copied_worktree / "skill_behavior_eval/corpus-v1.json")
 
 
 def test_case_selection_does_not_resolve_unselected_runtime_root(
@@ -776,6 +1303,68 @@ def test_case_selection_does_not_resolve_unselected_runtime_root(
     assert [case.id for case in selected] == ["case-a"]
     with pytest.raises(module.SkillBehaviorEvalError):
         module._selected_case_list_get(case_id_list=[], corpus_path_list=[corpus_path])
+
+
+@pytest.mark.parametrize("list_mode", [False, True], ids=["model", "list"])
+@pytest.mark.parametrize("owner_kind", ["non-git", "copied-worktree"])
+def test_filtered_multi_corpus_rejects_every_unselected_corpus_owner(
+    capsys: pytest.CaptureFixture[str],
+    list_mode: bool,
+    owner_kind: str,
+    tmp_path: Path,
+) -> None:
+    """Filtering defers evaluated projects but never a supplied corpus Git owner.
+
+    Args:
+        capsys: Pytest output capture fixture.
+        list_mode: Whether to exercise deterministic list mode.
+        owner_kind: Invalid unselected corpus owner shape.
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    selected_repository = tmp_path / "selected-repository"
+    _repository_create(selected_repository)
+    selected_corpus_path = selected_repository / "skill_behavior_eval/corpus-v1.json"
+    selected_corpus_path.parent.mkdir()
+    _corpus_write(selected_corpus_path, expected_skill_list=[], forbidden_skill_list=[])
+
+    if owner_kind == "non-git":
+        invalid_corpus_path = tmp_path / "non-git/skill_behavior_eval/corpus-v1.json"
+        invalid_corpus_path.parent.mkdir(parents=True)
+        invalid_corpus_path.write_bytes(selected_corpus_path.read_bytes())
+        error_pattern = "corpus worktree"
+    else:
+        source_repository = tmp_path / "source-repository"
+        _repository_create(source_repository)
+        linked_worktree = tmp_path / "linked-worktree"
+        _git_run(source_repository, ["worktree", "add", "-b", "feature", str(linked_worktree), "HEAD"])
+        linked_corpus_path = linked_worktree / "skill_behavior_eval/corpus-v1.json"
+        linked_corpus_path.parent.mkdir()
+        _corpus_write(linked_corpus_path, expected_skill_list=[], forbidden_skill_list=[])
+        copied_worktree = tmp_path / "copied-worktree"
+        shutil.copytree(linked_worktree, copied_worktree)
+        invalid_corpus_path = copied_worktree / "skill_behavior_eval/corpus-v1.json"
+        error_pattern = "exactly one registered worktree"
+    invalid_payload = json.loads(invalid_corpus_path.read_text(encoding="utf-8"))
+    invalid_payload["suite"] = "unselected-provider"
+    invalid_payload["case_list"][0]["id"] = "unselected-case"
+    invalid_corpus_path.write_text(json.dumps(invalid_payload), encoding="utf-8")
+    argument_list = [
+        "--corpus",
+        str(selected_corpus_path),
+        "--corpus",
+        str(invalid_corpus_path),
+        "--case",
+        "provider:case-a",
+    ]
+    if list_mode:
+        argument_list.append("--list")
+
+    return_code = module.main(argument_list)
+
+    assert return_code == 2
+    assert error_pattern in capsys.readouterr().out
 
 
 def test_corpus_load_rejects_boolean_schema_version(tmp_path: Path) -> None:
@@ -845,8 +1434,8 @@ def test_git_discovery_ignores_inherited_repository_redirection(
     assert _git_run(sentinel_repository, ["status", "--short"]) == ""
 
 
-def test_corpus_load_supports_a_separate_primary_git_directory(tmp_path: Path) -> None:
-    """Primary-worktree discovery must not assume a physical root `.git` directory.
+def test_corpus_load_rejects_an_unregistered_separate_primary_git_directory(tmp_path: Path) -> None:
+    """A separate Git directory cannot substitute for one registered worktree root.
 
     Args:
         tmp_path: Temporary directory path.
@@ -861,11 +1450,31 @@ def test_corpus_load_supports_a_separate_primary_git_directory(tmp_path: Path) -
     corpus_path = corpus_root / "corpus-v1.json"
     _corpus_write(corpus_path)
 
-    case_list = module._corpus_case_list_load(corpus_path)
+    with pytest.raises(module.SkillBehaviorEvalError, match="exactly one registered worktree"):
+        module._corpus_case_list_load(corpus_path)
 
-    assert case_list[0].working_directory == repository
-    assert (repository / ".git").is_file()
-    assert git_directory.is_dir()
+
+def test_corpus_load_rejects_invalid_linked_worktree_administration_back_reference(tmp_path: Path) -> None:
+    """One linked worktree requires its Git administration to point back to its `.git` file.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    repository = tmp_path / "repository"
+    _repository_create(repository)
+    linked_worktree = tmp_path / "linked-worktree"
+    _git_run(repository, ["worktree", "add", "-b", "feature", str(linked_worktree), "HEAD"])
+    corpus_root = linked_worktree / "skill_behavior_eval"
+    corpus_root.mkdir()
+    corpus_path = corpus_root / "corpus-v1.json"
+    _corpus_write(corpus_path)
+    administration_directory = Path(_git_run(linked_worktree, ["rev-parse", "--absolute-git-dir"]))
+    (administration_directory / "gitdir").write_text(str(tmp_path / "foreign/.git"), encoding="utf-8")
+
+    with pytest.raises(module.SkillBehaviorEvalError, match="exactly one registered worktree"):
+        module._corpus_case_list_load(corpus_path)
 
 
 @pytest.mark.parametrize("direct_kind", ["directory", "symlink"])
@@ -1159,8 +1768,39 @@ def test_corpus_load_normalizes_invalid_utf8(tmp_path: Path) -> None:
     """
 
     module = _module_load()
+    _repository_create(tmp_path)
     corpus_path = tmp_path / "corpus-v1.json"
     corpus_path.write_bytes(b"\xff")
+
+    with pytest.raises(module.SkillBehaviorEvalError, match="cannot load corpus"):
+        module._corpus_case_list_load(corpus_path)
+
+
+@pytest.mark.parametrize(
+    "corpus_text",
+    [
+        '{"schema_version":1,"suite":"provider","suite":"other","case_list":[]}',
+        (
+            '{"schema_version":1,"suite":"provider","case_list":[{'
+            '"id":"case-a","id":"case-b","working_directory":"..",'
+            '"working_directory_mode":"same-branch","prompt":"Review.",'
+            '"expected_skill_list":[],"forbidden_skill_list":[],"semantic_invariant_list":[]}]}'
+        ),
+    ],
+    ids=["root", "nested-case"],
+)
+def test_corpus_load_rejects_duplicate_json_keys(corpus_text: str, tmp_path: Path) -> None:
+    """Every corpus object rejects duplicate keys at its JSON boundary.
+
+    Args:
+        corpus_text: Corpus document with one duplicate object key.
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    _repository_create(tmp_path)
+    corpus_path = tmp_path / "corpus-v1.json"
+    corpus_path.write_text(corpus_text, encoding="utf-8")
 
     with pytest.raises(module.SkillBehaviorEvalError, match="cannot load corpus"):
         module._corpus_case_list_load(corpus_path)
@@ -1197,6 +1837,14 @@ def test_case_evaluate_combines_activation_and_independent_judge(
     corpus_path = corpus_root / "corpus-v1.json"
     _corpus_write(corpus_path)
     case = module._corpus_case_list_load(corpus_path)[0]
+    plugin_source_binding_by_name_map = _plugin_source_binding_by_name_map_create(
+        module,
+        tmp_path,
+        {
+            "agent-workflows": ["code-audit"],
+            "project-standards": ["python-developer"],
+        },
+    )
     call_list: list[dict[str, Any]] = []
 
     def _model_call(
@@ -1253,6 +1901,7 @@ def test_case_evaluate_combines_activation_and_independent_judge(
             model="gpt-5.6-sol",
             reasoning_effort="medium",
         ),
+        plugin_source_binding_by_name_map=plugin_source_binding_by_name_map,
         model_call=_model_call,
     )
 
@@ -1279,6 +1928,14 @@ def test_case_evaluate_reports_missing_and_forbidden_activations(
     corpus_path = corpus_root / "corpus-v1.json"
     _corpus_write(corpus_path)
     case = module._corpus_case_list_load(corpus_path)[0]
+    plugin_source_binding_by_name_map = _plugin_source_binding_by_name_map_create(
+        module,
+        tmp_path,
+        {
+            "agent-workflows": ["code-audit"],
+            "project-standards": ["python-developer"],
+        },
+    )
     payload_list = iter(
         [
             module.ModelInvocationResult(
@@ -1310,12 +1967,632 @@ def test_case_evaluate_reports_missing_and_forbidden_activations(
             model="gpt-5.6-sol",
             reasoning_effort="medium",
         ),
+        plugin_source_binding_by_name_map=plugin_source_binding_by_name_map,
         model_call=lambda *_args: next(payload_list),
     )
 
     assert result.passed is False
     assert result.missing_expected_skill_list == ("project-standards:python-developer",)
     assert result.forbidden_activated_skill_list == ("agent-workflows:code-audit",)
+
+
+def test_case_evaluate_rejects_bare_ambient_activation(tmp_path: Path) -> None:
+    """A bare ambient-only activation must fail before semantic judging."""
+
+    module = _module_load()
+    corpus_path = tmp_path / "skill_behavior_eval/corpus-v1.json"
+    corpus_path.parent.mkdir()
+    _corpus_write(corpus_path, expected_skill_list=[], forbidden_skill_list=[])
+    case = module._corpus_case_list_load(corpus_path)[0]
+    call_count = 0
+
+    def _model_call(*_args: Any) -> Any:
+        nonlocal call_count
+        call_count += 1
+        return module.ModelInvocationResult(
+            payload={
+                "activated_skill_list": ["ambient-skill"],
+                "response": "Read-only response.",
+            },
+            usage=module.CodexUsage(**_codex_usage_payload()),
+        )
+
+    with pytest.raises(module.SkillBehaviorCaseEvaluationError) as error_info:
+        module._case_evaluate(
+            case,
+            invocation_config=module.ModelInvocationConfig(
+                codex_bin="codex",
+                model="gpt-5.6-sol",
+                reasoning_effort="medium",
+            ),
+            plugin_source_binding_by_name_map=_plugin_source_binding_by_name_map_create(
+                module,
+                tmp_path,
+                {"project-standards": []},
+            ),
+            model_call=_model_call,
+        )
+
+    assert error_info.value.failure.error_code == "generation-validation-failed"
+    assert error_info.value.failure.codex_usage_generation == module.CodexUsage(**_codex_usage_payload())
+    assert call_count == 1
+
+
+def test_case_evaluate_rejects_nonexistent_qualified_skill(tmp_path: Path) -> None:
+    """A qualified activation must name a physical skill in its bound provider."""
+
+    module = _module_load()
+    corpus_path = tmp_path / "skill_behavior_eval/corpus-v1.json"
+    corpus_path.parent.mkdir()
+    _corpus_write(corpus_path, expected_skill_list=[], forbidden_skill_list=[])
+    case = module._corpus_case_list_load(corpus_path)[0]
+    call_count = 0
+
+    def _model_call(*_args: Any) -> Any:
+        nonlocal call_count
+        call_count += 1
+        return module.ModelInvocationResult(
+            payload={
+                "activated_skill_list": ["project-standards:missing-skill"],
+                "response": "Read-only response.",
+            },
+            usage=module.CodexUsage(**_codex_usage_payload()),
+        )
+
+    with pytest.raises(module.SkillBehaviorCaseEvaluationError) as error_info:
+        module._case_evaluate(
+            case,
+            invocation_config=module.ModelInvocationConfig(
+                codex_bin="codex",
+                model="gpt-5.6-sol",
+                reasoning_effort="medium",
+            ),
+            plugin_source_binding_by_name_map=_plugin_source_binding_by_name_map_create(
+                module,
+                tmp_path,
+                {"project-standards": []},
+            ),
+            model_call=_model_call,
+        )
+
+    assert error_info.value.failure.error_code == "generation-validation-failed"
+    assert error_info.value.failure.codex_usage_generation == module.CodexUsage(**_codex_usage_payload())
+    assert call_count == 1
+
+
+def test_case_evaluate_rejects_qualified_activated_provider_omitted_from_source_map(tmp_path: Path) -> None:
+    """An unexpected qualified provider without a source fails with generation telemetry.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    corpus_path = tmp_path / "skill_behavior_eval/corpus-v1.json"
+    corpus_path.parent.mkdir()
+    _corpus_write(corpus_path, expected_skill_list=[], forbidden_skill_list=[])
+    case = module._corpus_case_list_load(corpus_path)[0]
+    call_count = 0
+
+    def _model_call(*_args: Any) -> Any:
+        """Return one generation that activates an omitted provider source."""
+
+        nonlocal call_count
+        call_count += 1
+        if call_count != 1:
+            raise AssertionError("The judge must not run after source validation fails")
+        return module.ModelInvocationResult(
+            payload={
+                "activated_skill_list": ["workflow-container-agent-tools:workflow-container-developer"],
+                "response": "Read-only response.",
+            },
+            usage=module.CodexUsage(**_codex_usage_payload()),
+        )
+
+    with pytest.raises(module.SkillBehaviorCaseEvaluationError) as error_info:
+        module._case_evaluate(
+            case,
+            invocation_config=module.ModelInvocationConfig(
+                codex_bin="codex",
+                model="gpt-5.6-sol",
+                reasoning_effort="medium",
+            ),
+            plugin_source_binding_by_name_map={},
+            model_call=_model_call,
+        )
+
+    assert error_info.value.failure.error_code == "generation-validation-failed"
+    assert str(error_info.value) == "Generation result validation failed."
+    assert error_info.value.failure.codex_usage_generation == module.CodexUsage(**_codex_usage_payload())
+    assert error_info.value.failure.codex_usage_judge is None
+    assert call_count == 1
+
+
+def test_case_evaluate_accepts_exact_activated_provider_binding(tmp_path: Path) -> None:
+    """An additionally activated provider may proceed only through its exact binding."""
+
+    module = _module_load()
+    corpus_path = tmp_path / "skill_behavior_eval/corpus-v1.json"
+    corpus_path.parent.mkdir()
+    _corpus_write(corpus_path, expected_skill_list=[], forbidden_skill_list=[])
+    case = module._corpus_case_list_load(corpus_path)[0]
+    payload_list = iter(
+        [
+            module.ModelInvocationResult(
+                payload={
+                    "activated_skill_list": ["workflow-container-agent-tools:workflow-container-developer"],
+                    "response": "Read-only response.",
+                },
+                usage=module.CodexUsage(**_codex_usage_payload()),
+            ),
+            module.ModelInvocationResult(
+                payload={
+                    "invariant_result_list": [{"id": "bounded", "passed": True, "reason": "The response is read-only."}]
+                },
+                usage=module.CodexUsage(**_codex_usage_payload()),
+            ),
+        ]
+    )
+
+    plugin_source_binding_by_name_map = _plugin_source_binding_by_name_map_create(
+        module,
+        tmp_path,
+        {"workflow-container-agent-tools": ["workflow-container-developer"]},
+    )
+
+    result = module._case_evaluate(
+        case,
+        invocation_config=module.ModelInvocationConfig(
+            codex_bin="codex",
+            model="gpt-5.6-sol",
+            reasoning_effort="medium",
+        ),
+        plugin_source_binding_by_name_map=plugin_source_binding_by_name_map,
+        model_call=lambda *_args: next(payload_list),
+    )
+
+    assert result.passed is True
+    assert result.activated_skill_list == ("workflow-container-agent-tools:workflow-container-developer",)
+
+
+def test_case_evaluate_accepts_physical_project_local_skill(tmp_path: Path) -> None:
+    """One bare project-local activation resolves to its physical canonical owner."""
+
+    module = _module_load()
+    corpus_path = tmp_path / "skill_behavior_eval/corpus-v1.json"
+    corpus_path.parent.mkdir()
+    _corpus_write(
+        corpus_path,
+        expected_skill_list=["local-review"],
+        forbidden_skill_list=[],
+    )
+    case = module._corpus_case_list_load(corpus_path)[0]
+    local_skill_path = case.working_directory / ".agents/skills/local-review/SKILL.md"
+    local_skill_path.parent.mkdir(parents=True)
+    local_skill_path.write_text(
+        "---\nname: local-review\ndescription: Deterministic local test skill.\n---\n",
+        encoding="utf-8",
+    )
+    payload_list = iter(
+        [
+            module.ModelInvocationResult(
+                payload={"activated_skill_list": ["local-review"], "response": "Read-only response."},
+                usage=module.CodexUsage(**_codex_usage_payload()),
+            ),
+            module.ModelInvocationResult(
+                payload={
+                    "invariant_result_list": [{"id": "bounded", "passed": True, "reason": "The response is read-only."}]
+                },
+                usage=module.CodexUsage(**_codex_usage_payload()),
+            ),
+        ]
+    )
+
+    result = module._case_evaluate(
+        case,
+        invocation_config=module.ModelInvocationConfig(
+            codex_bin="codex",
+            model="gpt-5.6-sol",
+            reasoning_effort="medium",
+        ),
+        plugin_source_binding_by_name_map={},
+        model_call=lambda *_args: next(payload_list),
+    )
+
+    assert result.passed is True
+    assert result.activated_skill_list == ("local-review",)
+
+
+def test_project_local_skill_rejects_unrepaired_moved_linked_worktree(tmp_path: Path) -> None:
+    """A moved linked worktree cannot become a project-local skill owner.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    repository = tmp_path / "repository"
+    _repository_create(repository)
+    linked_worktree = tmp_path / "linked-worktree"
+    _git_run(repository, ["worktree", "add", "-b", "feature", str(linked_worktree), "HEAD"])
+    local_skill_path = linked_worktree / ".agents/skills/local-review/SKILL.md"
+    local_skill_path.parent.mkdir(parents=True)
+    local_skill_path.write_text(
+        "---\nname: local-review\ndescription: Deterministic local test skill.\n---\n",
+        encoding="utf-8",
+    )
+    project_evaluation_binding = module._project_evaluation_binding_get(
+        linked_worktree.resolve(),
+        working_directory_mode="same-branch",
+    )
+    moved_worktree = tmp_path / "moved-worktree"
+    linked_worktree.rename(moved_worktree)
+    case = module.SkillBehaviorCase(
+        corpus_path=moved_worktree / "skill_behavior_eval/corpus-v1.json",
+        expected_skill_list=("local-review",),
+        forbidden_skill_list=(),
+        id="case-a",
+        prompt="Review one Python function.",
+        project_evaluation_binding=project_evaluation_binding,
+        semantic_invariant_list=(module.SemanticInvariant(id="bounded", text="The response remains read-only."),),
+        suite="provider",
+        working_directory=moved_worktree,
+    )
+
+    with pytest.raises(module.SkillBehaviorEvalError, match="exactly one registered worktree"):
+        module._project_local_skill_path_get(case, "local-review")
+
+
+def test_case_evaluate_rejects_provider_and_project_local_collision(tmp_path: Path) -> None:
+    """One bare activation cannot collide across a declared provider and project owner."""
+
+    module = _module_load()
+    corpus_path = tmp_path / "skill_behavior_eval/corpus-v1.json"
+    corpus_path.parent.mkdir()
+    _corpus_write(
+        corpus_path,
+        expected_skill_list=["provider-a:shared"],
+        forbidden_skill_list=[],
+    )
+    case = module._corpus_case_list_load(corpus_path)[0]
+    local_skill_path = case.working_directory / ".agents/skills/shared/SKILL.md"
+    local_skill_path.parent.mkdir(parents=True)
+    local_skill_path.write_text(
+        "---\nname: shared\ndescription: Deterministic local test skill.\n---\n",
+        encoding="utf-8",
+    )
+    call_count = 0
+
+    def _model_call(*_args: Any) -> Any:
+        nonlocal call_count
+        call_count += 1
+        return module.ModelInvocationResult(
+            payload={"activated_skill_list": ["shared"], "response": "Read-only response."},
+            usage=module.CodexUsage(**_codex_usage_payload()),
+        )
+
+    with pytest.raises(module.SkillBehaviorCaseEvaluationError) as error_info:
+        module._case_evaluate(
+            case,
+            invocation_config=module.ModelInvocationConfig(
+                codex_bin="codex",
+                model="gpt-5.6-sol",
+                reasoning_effort="medium",
+            ),
+            plugin_source_binding_by_name_map=_plugin_source_binding_by_name_map_create(
+                module,
+                tmp_path,
+                {"provider-a": ["shared"]},
+            ),
+            model_call=_model_call,
+        )
+
+    assert error_info.value.failure.error_code == "generation-validation-failed"
+    assert error_info.value.failure.codex_usage_generation == module.CodexUsage(**_codex_usage_payload())
+    assert call_count == 1
+
+
+def test_case_evaluate_accepts_no_activation_with_no_required_provider(tmp_path: Path) -> None:
+    """An empty activation report adds no provider to the required source union."""
+
+    module = _module_load()
+    corpus_path = tmp_path / "skill_behavior_eval/corpus-v1.json"
+    corpus_path.parent.mkdir()
+    _corpus_write(corpus_path, expected_skill_list=[], forbidden_skill_list=[])
+    case = module._corpus_case_list_load(corpus_path)[0]
+    payload_list = iter(
+        [
+            module.ModelInvocationResult(
+                payload={"activated_skill_list": [], "response": "Read-only response."},
+                usage=module.CodexUsage(**_codex_usage_payload()),
+            ),
+            module.ModelInvocationResult(
+                payload={
+                    "invariant_result_list": [{"id": "bounded", "passed": True, "reason": "The response is read-only."}]
+                },
+                usage=module.CodexUsage(**_codex_usage_payload()),
+            ),
+        ]
+    )
+
+    result = module._case_evaluate(
+        case,
+        invocation_config=module.ModelInvocationConfig(
+            codex_bin="codex",
+            model="gpt-5.6-sol",
+            reasoning_effort="medium",
+        ),
+        plugin_source_binding_by_name_map=_plugin_source_binding_by_name_map_create(
+            module,
+            tmp_path,
+            {"project-standards": []},
+        ),
+        model_call=lambda *_args: next(payload_list),
+    )
+
+    assert result.passed is True
+    assert result.activated_skill_list == ()
+
+
+@pytest.mark.parametrize("binding_side", ["source", "cache"])
+@pytest.mark.parametrize("invocation_stage", ["generation", "judge"])
+def test_case_evaluate_rejects_provider_binding_drift_between_stages(
+    binding_side: str,
+    invocation_stage: str,
+    tmp_path: Path,
+) -> None:
+    """Source and cache drift around either invocation becomes typed non-acceptance.
+
+    Args:
+        binding_side: Provider tree mutated by the model-call fixture.
+        invocation_stage: Invocation after which the binding changes.
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    corpus_path = tmp_path / "skill_behavior_eval/corpus-v1.json"
+    corpus_path.parent.mkdir()
+    _corpus_write(corpus_path)
+    case = module._corpus_case_list_load(corpus_path)[0]
+    plugin_source_binding_by_name_map = _plugin_source_binding_by_name_map_create(
+        module,
+        tmp_path,
+        {
+            "agent-workflows": ["code-audit"],
+            "project-standards": ["python-developer"],
+        },
+    )
+    invocation_count = 0
+
+    def _model_call(*_args: Any) -> Any:
+        """Return one valid result after applying the selected deterministic drift."""
+
+        nonlocal invocation_count
+        invocation_count += 1
+        current_stage = "generation" if invocation_count == 1 else "judge"
+        if current_stage == invocation_stage:
+            binding = plugin_source_binding_by_name_map["project-standards"]
+            binding_path = binding.source_path if binding_side == "source" else binding.cache_path
+            (binding_path / "SKILL.md").write_text("drifted\n", encoding="utf-8")
+        if current_stage == "generation":
+            return module.ModelInvocationResult(
+                payload={
+                    "activated_skill_list": ["project-standards:python-developer"],
+                    "response": "Read-only response.",
+                },
+                usage=module.CodexUsage(**_codex_usage_payload()),
+            )
+        return module.ModelInvocationResult(
+            payload={
+                "invariant_result_list": [
+                    {"id": "bounded", "passed": True, "reason": "The response remains read-only."}
+                ]
+            },
+            usage=module.CodexUsage(**_codex_usage_payload(2)),
+        )
+
+    with pytest.raises(module.SkillBehaviorCaseEvaluationError) as error_info:
+        module._case_evaluate(
+            case,
+            invocation_config=module.ModelInvocationConfig(
+                codex_bin="codex",
+                model="gpt-5.6-sol",
+                reasoning_effort="medium",
+            ),
+            plugin_source_binding_by_name_map=plugin_source_binding_by_name_map,
+            model_call=_model_call,
+        )
+
+    failure = error_info.value.failure
+    assert failure.error_code == f"{invocation_stage}-validation-failed"
+    assert failure.codex_usage_generation == module.CodexUsage(**_codex_usage_payload())
+    assert failure.codex_usage_judge == (
+        module.CodexUsage(**_codex_usage_payload(2)) if invocation_stage == "judge" else None
+    )
+    assert invocation_count == (2 if invocation_stage == "judge" else 1)
+
+
+def _marketplace_manifest_drift(binding: Any, *, drift_kind: str) -> None:
+    """Change one retained marketplace identity or selected source declaration.
+
+    Args:
+        binding: Exact provider source binding.
+        drift_kind: Marketplace-name or plugin-source drift.
+    """
+
+    payload = json.loads(binding.marketplace_manifest_path.read_text(encoding="utf-8"))
+    if drift_kind == "marketplace-name":
+        payload["name"] = "different-marketplace"
+    elif drift_kind == "plugin-source":
+        payload["plugins"][0]["source"]["path"] = "./plugins/different-source"
+    else:
+        raise AssertionError(f"Unsupported marketplace drift kind: {drift_kind}")
+    binding.marketplace_manifest_path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+
+@pytest.mark.parametrize("invocation_stage", ["generation", "judge"])
+@pytest.mark.parametrize("drift_kind", ["marketplace-name", "plugin-source"])
+def test_case_evaluate_rejects_marketplace_declaration_drift_between_stages(
+    drift_kind: str,
+    invocation_stage: str,
+    tmp_path: Path,
+) -> None:
+    """Every model-stage reproof compares the retained marketplace declaration.
+
+    Args:
+        drift_kind: Marketplace identity or selected plugin-source drift.
+        invocation_stage: Invocation after which the declaration changes.
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    corpus_path = tmp_path / "skill_behavior_eval/corpus-v1.json"
+    corpus_path.parent.mkdir()
+    _corpus_write(corpus_path)
+    case = module._corpus_case_list_load(corpus_path)[0]
+    plugin_source_binding_by_name_map = _plugin_source_binding_by_name_map_create(
+        module,
+        tmp_path,
+        {
+            "agent-workflows": ["code-audit"],
+            "project-standards": ["python-developer"],
+        },
+    )
+    invocation_count = 0
+
+    def _model_call(*_args: Any) -> Any:
+        """Return one valid result after applying the selected manifest drift."""
+
+        nonlocal invocation_count
+        invocation_count += 1
+        current_stage = "generation" if invocation_count == 1 else "judge"
+        if current_stage == invocation_stage:
+            _marketplace_manifest_drift(
+                plugin_source_binding_by_name_map["project-standards"],
+                drift_kind=drift_kind,
+            )
+        if current_stage == "generation":
+            return module.ModelInvocationResult(
+                payload={
+                    "activated_skill_list": ["project-standards:python-developer"],
+                    "response": "Read-only response.",
+                },
+                usage=module.CodexUsage(**_codex_usage_payload()),
+            )
+        return module.ModelInvocationResult(
+            payload={
+                "invariant_result_list": [
+                    {"id": "bounded", "passed": True, "reason": "The response remains read-only."}
+                ]
+            },
+            usage=module.CodexUsage(**_codex_usage_payload(2)),
+        )
+
+    with pytest.raises(module.SkillBehaviorCaseEvaluationError) as error_info:
+        module._case_evaluate(
+            case,
+            invocation_config=module.ModelInvocationConfig(
+                codex_bin="codex",
+                model="gpt-5.6-sol",
+                reasoning_effort="medium",
+            ),
+            plugin_source_binding_by_name_map=plugin_source_binding_by_name_map,
+            model_call=_model_call,
+        )
+
+    failure = error_info.value.failure
+    assert failure.error_code == f"{invocation_stage}-validation-failed"
+    assert failure.codex_usage_generation == module.CodexUsage(**_codex_usage_payload())
+    assert failure.codex_usage_judge == (
+        module.CodexUsage(**_codex_usage_payload(2)) if invocation_stage == "judge" else None
+    )
+    assert invocation_count == (2 if invocation_stage == "judge" else 1)
+
+
+def _evaluated_project_replace(project_path: Path, *, replacement_kind: str) -> None:
+    """Persistently replace one evaluated project with a foreign path owner.
+
+    Args:
+        project_path: Exact evaluated worktree root.
+        replacement_kind: Symbolic, non-Git, or different-worktree replacement.
+    """
+
+    original_project_path = project_path.with_name(f"{project_path.name}-original")
+    project_path.rename(original_project_path)
+    if replacement_kind == "symbolic":
+        project_path.symlink_to(original_project_path, target_is_directory=True)
+    elif replacement_kind == "non-git":
+        project_path.mkdir()
+    elif replacement_kind == "different-worktree":
+        _repository_create(project_path)
+    else:
+        raise AssertionError(f"Unsupported replacement kind: {replacement_kind}")
+
+
+@pytest.mark.parametrize("invocation_stage", ["generation", "judge"])
+@pytest.mark.parametrize("replacement_kind", ["symbolic", "non-git", "different-worktree"])
+def test_case_evaluate_rejects_evaluated_project_replacement_between_stages(
+    invocation_stage: str,
+    replacement_kind: str,
+    tmp_path: Path,
+) -> None:
+    """Generation and judge reproof reject every persistent project replacement.
+
+    Args:
+        invocation_stage: Invocation after which the evaluated project is replaced.
+        replacement_kind: Replacement owner shape.
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    project_path = tmp_path / "evaluated-project"
+    corpus_path = project_path / "skill_behavior_eval/corpus-v1.json"
+    corpus_path.parent.mkdir(parents=True)
+    _corpus_write(corpus_path, expected_skill_list=[], forbidden_skill_list=[])
+    case = module._corpus_case_list_load(corpus_path)[0]
+    invocation_count = 0
+
+    def _model_call(*_args: Any) -> Any:
+        """Return one valid result after the selected persistent replacement."""
+
+        nonlocal invocation_count
+        invocation_count += 1
+        current_stage = "generation" if invocation_count == 1 else "judge"
+        if current_stage == invocation_stage:
+            _evaluated_project_replace(project_path, replacement_kind=replacement_kind)
+        if current_stage == "generation":
+            return module.ModelInvocationResult(
+                payload={"activated_skill_list": [], "response": "Read-only response."},
+                usage=module.CodexUsage(**_codex_usage_payload()),
+            )
+        return module.ModelInvocationResult(
+            payload={
+                "invariant_result_list": [
+                    {"id": "bounded", "passed": True, "reason": "The response remains read-only."}
+                ]
+            },
+            usage=module.CodexUsage(**_codex_usage_payload(2)),
+        )
+
+    with pytest.raises(module.SkillBehaviorCaseEvaluationError) as error_info:
+        module._case_evaluate(
+            case,
+            invocation_config=module.ModelInvocationConfig(
+                codex_bin="codex",
+                model="gpt-5.6-sol",
+                reasoning_effort="medium",
+            ),
+            plugin_source_binding_by_name_map={},
+            model_call=_model_call,
+        )
+
+    failure = error_info.value.failure
+    assert failure.error_code == f"{invocation_stage}-validation-failed"
+    assert failure.codex_usage_generation == module.CodexUsage(**_codex_usage_payload())
+    assert failure.codex_usage_judge == (
+        module.CodexUsage(**_codex_usage_payload(2)) if invocation_stage == "judge" else None
+    )
+    assert invocation_count == (2 if invocation_stage == "judge" else 1)
 
 
 def test_activation_normalization_requires_one_unambiguous_provider_identity(
@@ -1334,9 +2611,16 @@ def test_activation_normalization_requires_one_unambiguous_provider_identity(
     _corpus_write(corpus_path)
     case = module._corpus_case_list_load(corpus_path)[0]
 
-    assert module._activated_skill_tuple_normalize(["python-developer"], case=case) == (
-        "project-standards:python-developer",
+    plugin_source_binding_by_name_map = _plugin_source_binding_by_name_map_create(
+        module,
+        tmp_path,
+        {"project-standards": ["python-developer"]},
     )
+    assert module._activated_skill_tuple_resolve(
+        ["python-developer"],
+        case=case,
+        plugin_source_binding_by_name_map=plugin_source_binding_by_name_map,
+    ) == ("project-standards:python-developer",)
 
     ambiguous_case = module.SkillBehaviorCase(
         corpus_path=case.corpus_path,
@@ -1344,11 +2628,60 @@ def test_activation_normalization_requires_one_unambiguous_provider_identity(
         forbidden_skill_list=("provider-b:shared",),
         id=case.id,
         prompt=case.prompt,
+        project_evaluation_binding=case.project_evaluation_binding,
         semantic_invariant_list=case.semantic_invariant_list,
         suite=case.suite,
         working_directory=case.working_directory,
     )
-    assert module._activated_skill_tuple_normalize(["shared"], case=ambiguous_case) == ("shared",)
+    ambiguous_plugin_source_binding_by_name_map = _plugin_source_binding_by_name_map_create(
+        module,
+        tmp_path,
+        {"provider-a": ["shared"], "provider-b": ["shared"]},
+    )
+    with pytest.raises(module.SkillBehaviorEvalError, match="ambiguous source identity"):
+        module._activated_skill_tuple_resolve(
+            ["shared"],
+            case=ambiguous_case,
+            plugin_source_binding_by_name_map=ambiguous_plugin_source_binding_by_name_map,
+        )
+
+
+def test_project_local_skill_rejects_non_git_owner(tmp_path: Path) -> None:
+    """Project-local activation never falls back to one ambient directory."""
+
+    module = _module_load()
+    skill_path = tmp_path / ".agents/skills/local-review/SKILL.md"
+    skill_path.parent.mkdir(parents=True)
+    skill_path.write_text(
+        "---\nname: local-review\ndescription: Review local code.\n---\n",
+        encoding="utf-8",
+    )
+    case = module.SkillBehaviorCase(
+        corpus_path=tmp_path / "corpus-v1.json",
+        expected_skill_list=(),
+        forbidden_skill_list=(),
+        id="case-a",
+        prompt="Review.",
+        project_evaluation_binding=module.ProjectEvaluationBinding(
+            branch_ref="refs/heads/main",
+            git_common_directory=tmp_path,
+            git_common_directory_device_number=tmp_path.stat().st_dev,
+            git_common_directory_inode_number=tmp_path.stat().st_ino,
+            working_directory=tmp_path,
+            working_directory_device_number=tmp_path.stat().st_dev,
+            working_directory_inode_number=tmp_path.stat().st_ino,
+            working_directory_mode="same-branch",
+            worktree_root=tmp_path,
+            worktree_root_device_number=tmp_path.stat().st_dev,
+            worktree_root_inode_number=tmp_path.stat().st_ino,
+        ),
+        semantic_invariant_list=(),
+        suite="provider",
+        working_directory=tmp_path,
+    )
+
+    with pytest.raises(module.SkillBehaviorEvalError, match="project-local skill owner"):
+        module._project_local_skill_path_get(case, "local-review")
 
 
 def test_case_list_evaluate_preserves_corpus_order(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -1371,17 +2704,24 @@ def test_case_list_evaluate_preserves_corpus_order(monkeypatch: pytest.MonkeyPat
         forbidden_skill_list=first_case.forbidden_skill_list,
         id="case-b",
         prompt=first_case.prompt,
+        project_evaluation_binding=first_case.project_evaluation_binding,
         semantic_invariant_list=first_case.semantic_invariant_list,
         suite=first_case.suite,
         working_directory=first_case.working_directory,
     )
 
-    def _case_evaluate(case: Any, *, invocation_config: Any) -> Any:
+    def _case_evaluate(
+        case: Any,
+        *,
+        invocation_config: Any,
+        plugin_source_binding_by_name_map: dict[str, Any],
+    ) -> Any:
         """Return the second case first.
 
         Args:
             case: Case.
             invocation_config: Invocation config.
+            plugin_source_binding_by_name_map: Provider source bindings.
 
         Returns:
             The second case first.
@@ -1403,7 +2743,7 @@ def test_case_list_evaluate_preserves_corpus_order(monkeypatch: pytest.MonkeyPat
         )
 
     monkeypatch.setattr(module, "_case_evaluate", _case_evaluate)
-    result_list = module._case_list_evaluate(
+    evaluation_attempt = module._case_list_evaluate(
         [first_case, second_case],
         concurrency=2,
         invocation_config=module.ModelInvocationConfig(
@@ -1411,9 +2751,296 @@ def test_case_list_evaluate_preserves_corpus_order(monkeypatch: pytest.MonkeyPat
             model="gpt-5.6-sol",
             reasoning_effort="medium",
         ),
+        plugin_source_binding_by_name_map=_plugin_source_binding_by_name_map_create(
+            module,
+            tmp_path,
+            {
+                "agent-workflows": ["code-audit"],
+                "project-standards": ["python-developer"],
+            },
+        ),
     )
 
+    result_list = evaluation_attempt.result_list_get()
     assert [result.id for result in result_list] == ["case-a", "case-b"]
+
+
+def test_case_list_evaluate_drains_all_futures_into_non_acceptance_record(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """One case failure cannot discard another submitted case or its exact counters.
+
+    Args:
+        monkeypatch: Pytest mutation fixture.
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    corpus_path = tmp_path / "skill_behavior_eval/corpus-v1.json"
+    corpus_path.parent.mkdir()
+    _corpus_write(corpus_path)
+    first_case = module._corpus_case_list_load(corpus_path)[0]
+    second_case = module.SkillBehaviorCase(
+        corpus_path=first_case.corpus_path,
+        expected_skill_list=first_case.expected_skill_list,
+        forbidden_skill_list=first_case.forbidden_skill_list,
+        id="case-b",
+        prompt=first_case.prompt,
+        project_evaluation_binding=first_case.project_evaluation_binding,
+        semantic_invariant_list=first_case.semantic_invariant_list,
+        suite=first_case.suite,
+        working_directory=first_case.working_directory,
+    )
+    completed_case_id_list: list[str] = []
+
+    def _case_evaluate(
+        case: Any,
+        *,
+        invocation_config: Any,
+        plugin_source_binding_by_name_map: dict[str, Any],
+    ) -> Any:
+        """Fail one case and complete the other with exact usage."""
+
+        completed_case_id_list.append(case.id)
+        if case.id == "case-a":
+            raise module.SkillBehaviorCaseEvaluationError(
+                module.SkillBehaviorCaseFailure(
+                    codex_usage_generation=module.CodexUsage(**_codex_usage_payload()),
+                    codex_usage_judge=None,
+                    error_code="generation-validation-failed",
+                    error_message="Generation result validation failed.",
+                    id=case.id,
+                    suite=case.suite,
+                )
+            )
+        return module.SkillBehaviorCaseResult(
+            activated_skill_list=(),
+            codex_usage_generation=module.CodexUsage(**_codex_usage_payload(2)),
+            codex_usage_judge=module.CodexUsage(**_codex_usage_payload(3)),
+            forbidden_activated_skill_list=(),
+            id=case.id,
+            missing_expected_skill_list=(),
+            passed=True,
+            response="response",
+            semantic_invariant_result_list=(),
+            suite=case.suite,
+        )
+
+    monkeypatch.setattr(module, "_case_evaluate", _case_evaluate)
+    invocation_config = module.ModelInvocationConfig(
+        codex_bin="codex",
+        model="gpt-5.6-sol",
+        reasoning_effort="medium",
+    )
+    evaluation_attempt = module._case_list_evaluate(
+        [first_case, second_case],
+        concurrency=2,
+        invocation_config=invocation_config,
+        plugin_source_binding_by_name_map=_plugin_source_binding_by_name_map_create(
+            module,
+            tmp_path,
+            {
+                "agent-workflows": ["code-audit"],
+                "project-standards": ["python-developer"],
+            },
+        ),
+    )
+
+    payload = evaluation_attempt.non_acceptance_payload_get(invocation_config)
+    assert sorted(completed_case_id_list) == ["case-a", "case-b"]
+    assert payload["record_type"] == "skill-behavior-evaluation-non-acceptance"
+    assert payload["case_usage_list"] == [
+        {
+            "codex_usage_generation": _codex_usage_payload(),
+            "codex_usage_judge": None,
+            "error_code": "generation-validation-failed",
+            "error_message": "Generation result validation failed.",
+            "id": "case-a",
+            "outcome": "failed",
+            "suite": first_case.suite,
+        },
+        {
+            "codex_usage_generation": _codex_usage_payload(2),
+            "codex_usage_judge": _codex_usage_payload(3),
+            "error_code": None,
+            "error_message": None,
+            "id": "case-b",
+            "outcome": "completed",
+            "suite": first_case.suite,
+        },
+    ]
+    assert payload["codex_usage"] == _codex_usage_payload(6)
+    acceptance_module = _acceptance_module_load()
+    with pytest.raises(acceptance_module.SkillBehaviorAcceptanceError):
+        acceptance_module.acceptance_state_get([payload])
+
+
+def test_case_list_evaluate_drains_submitted_future_after_submission_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A partial submission failure preserves submitted usage and closes every remaining case.
+
+    Args:
+        monkeypatch: Pytest mutation fixture.
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    corpus_path = tmp_path / "skill_behavior_eval/corpus-v1.json"
+    corpus_path.parent.mkdir()
+    _corpus_write(corpus_path)
+    first_case = module._corpus_case_list_load(corpus_path)[0]
+    case_list = [
+        module.SkillBehaviorCase(
+            corpus_path=first_case.corpus_path,
+            expected_skill_list=first_case.expected_skill_list,
+            forbidden_skill_list=first_case.forbidden_skill_list,
+            id=f"case-{case_number}",
+            prompt=first_case.prompt,
+            project_evaluation_binding=first_case.project_evaluation_binding,
+            semantic_invariant_list=first_case.semantic_invariant_list,
+            suite=first_case.suite,
+            working_directory=first_case.working_directory,
+        )
+        for case_number in range(3)
+    ]
+    real_executor = module.ThreadPoolExecutor
+
+    class PartialSubmissionExecutor:
+        """Submit one future and reject the next submission."""
+
+        def __init__(self, max_workers: int) -> None:
+            """Create the delegated real executor.
+
+            Args:
+                max_workers: Maximum worker count.
+            """
+
+            self.executor = real_executor(max_workers=max_workers)
+            self.submission_count = 0
+
+        def __enter__(self) -> Any:
+            """Enter the delegated executor context."""
+
+            self.executor.__enter__()
+            return self
+
+        def __exit__(self, *argument_list: Any) -> None:
+            """Exit the delegated executor context.
+
+            Args:
+                argument_list: Context-manager exit arguments.
+            """
+
+            self.executor.__exit__(*argument_list)
+
+        def submit(self, function: Any, *argument_list: Any, **keyword_by_name_map: Any) -> Any:
+            """Submit the first case and reject the second.
+
+            Args:
+                function: Submitted callable.
+                argument_list: Positional call arguments.
+                keyword_by_name_map: Keyword call arguments.
+
+            Returns:
+                First submitted future.
+            """
+
+            self.submission_count += 1
+            if self.submission_count == 2:
+                raise RuntimeError("submission-secret-sentinel")
+            return self.executor.submit(function, *argument_list, **keyword_by_name_map)
+
+    def _case_evaluate(*_args: Any, **_kwargs: Any) -> Any:
+        """Return one completed submitted case with exact usage."""
+
+        return module.SkillBehaviorCaseResult(
+            activated_skill_list=(),
+            codex_usage_generation=module.CodexUsage(**_codex_usage_payload()),
+            codex_usage_judge=module.CodexUsage(**_codex_usage_payload(2)),
+            forbidden_activated_skill_list=(),
+            id="case-0",
+            missing_expected_skill_list=(),
+            passed=True,
+            response="response",
+            semantic_invariant_result_list=(),
+            suite=first_case.suite,
+        )
+
+    monkeypatch.setattr(module, "ThreadPoolExecutor", PartialSubmissionExecutor)
+    monkeypatch.setattr(module, "_case_evaluate", _case_evaluate)
+    invocation_config = module.ModelInvocationConfig(
+        codex_bin="codex",
+        model="gpt-5.6-sol",
+        reasoning_effort="medium",
+    )
+    evaluation_attempt = module._case_list_evaluate(
+        case_list,
+        concurrency=3,
+        invocation_config=invocation_config,
+        plugin_source_binding_by_name_map={},
+    )
+
+    payload = evaluation_attempt.non_acceptance_payload_get(invocation_config)
+    assert [item["outcome"] for item in payload["case_usage_list"]] == ["completed", "failed", "failed"]
+    assert [item["error_code"] for item in payload["case_usage_list"]] == [
+        None,
+        "case-submission-failed",
+        "case-not-submitted",
+    ]
+    assert payload["codex_usage"] == _codex_usage_payload(3)
+    assert "submission-secret-sentinel" not in json.dumps(payload)
+
+
+def test_case_list_evaluate_preserves_results_when_stdout_is_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A closed progress stream cannot discard one completed result or its usage."""
+
+    module = _module_load()
+    corpus_path = tmp_path / "skill_behavior_eval/corpus-v1.json"
+    corpus_path.parent.mkdir()
+    _corpus_write(corpus_path)
+    case = module._corpus_case_list_load(corpus_path)[0]
+
+    def _case_evaluate(*_args: Any, **_kwargs: Any) -> Any:
+        """Return one completed case with exact generation and judge usage."""
+
+        return module.SkillBehaviorCaseResult(
+            activated_skill_list=(),
+            codex_usage_generation=module.CodexUsage(**_codex_usage_payload()),
+            codex_usage_judge=module.CodexUsage(**_codex_usage_payload(2)),
+            forbidden_activated_skill_list=(),
+            id=case.id,
+            missing_expected_skill_list=(),
+            passed=True,
+            response="response",
+            semantic_invariant_result_list=(),
+            suite=case.suite,
+        )
+
+    monkeypatch.setattr(module, "_case_evaluate", _case_evaluate)
+    closed_stdout = io.StringIO()
+    closed_stdout.close()
+    monkeypatch.setattr(sys, "stdout", closed_stdout)
+
+    evaluation_attempt = module._case_list_evaluate(
+        [case],
+        concurrency=1,
+        invocation_config=module.ModelInvocationConfig(
+            codex_bin="codex",
+            model="gpt-5.6-sol",
+            reasoning_effort="medium",
+        ),
+        plugin_source_binding_by_name_map={},
+    )
+
+    result = evaluation_attempt.result_list_get()[0]
+    assert result.codex_usage_generation == module.CodexUsage(**_codex_usage_payload())
+    assert result.codex_usage_judge == module.CodexUsage(**_codex_usage_payload(2))
 
 
 def _plugin_binding_fixture_create(
@@ -1426,7 +3053,9 @@ def _plugin_binding_fixture_create(
 ) -> tuple[Path, Path]:
     """Create one source marketplace and matching server-prepared cache fixture."""
 
+    tmp_path.mkdir(parents=True, exist_ok=True)
     marketplace_path = tmp_path / "provider-worktree"
+    _repository_create(marketplace_path)
     plugin_source = source or {"source": "local", "path": f"./plugins/{plugin_name}"}
     marketplace_manifest_path = marketplace_path / ".agents/plugins/marketplace.json"
     marketplace_manifest_path.parent.mkdir(parents=True)
@@ -1451,12 +3080,149 @@ def _plugin_binding_fixture_create(
             encoding="utf-8",
         )
         (source_plugin_path / "SKILL.md").write_text("source\n", encoding="utf-8")
+        source_skill_path = source_plugin_path / "skills/python-developer/SKILL.md"
+        source_skill_path.parent.mkdir(parents=True)
+        source_skill_path.write_text(
+            "---\nname: python-developer\ndescription: Deterministic provider test skill.\n---\n",
+            encoding="utf-8",
+        )
         cache_plugin_path = standard_codex_home / f"plugins/cache/{marketplace_name}/{plugin_name}/{plugin_version}"
         cache_manifest_path = cache_plugin_path / ".codex-plugin/plugin.json"
         cache_manifest_path.parent.mkdir(parents=True)
         cache_manifest_path.write_bytes(source_manifest_path.read_bytes())
         (cache_plugin_path / "SKILL.md").write_text("source\n", encoding="utf-8")
+        cache_skill_path = cache_plugin_path / "skills/python-developer/SKILL.md"
+        cache_skill_path.parent.mkdir(parents=True)
+        cache_skill_path.write_bytes(source_skill_path.read_bytes())
     return marketplace_path, standard_codex_home
+
+
+def test_activated_provider_manifest_rejects_duplicate_identity_key(tmp_path: Path) -> None:
+    """The shared manifest loader rejects a repeated plugin identity key.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    duplicate_manifest_text = '{"name":"project-standards","name":"other-provider","version":"0.1.0"}\n'
+    marketplace_worktree_root = tmp_path / "provider-marketplace"
+    _repository_create(marketplace_worktree_root)
+    plugin_source_path = _plugin_source_path_create(
+        marketplace_worktree_root / "plugins/project-standards",
+        "project-standards",
+        [],
+    )
+    plugin_cache_path = _plugin_source_path_create(tmp_path / "provider-cache", "project-standards", [])
+    for manifest_path in (
+        plugin_source_path / ".codex-plugin/plugin.json",
+        plugin_cache_path / ".codex-plugin/plugin.json",
+    ):
+        manifest_path.write_text(duplicate_manifest_text, encoding="utf-8")
+    plugin_source_declaration = {
+        "name": "project-standards",
+        "source": {"source": "local", "path": "./plugins/project-standards"},
+    }
+    marketplace_manifest_path = marketplace_worktree_root / ".agents/plugins/marketplace.json"
+    marketplace_manifest_path.parent.mkdir(parents=True)
+    marketplace_manifest_path.write_text(
+        json.dumps({"name": "provider-marketplace", "plugins": [plugin_source_declaration]}) + "\n",
+        encoding="utf-8",
+    )
+    plugin_source_binding = module.PluginSourceBinding(
+        cache_path=plugin_cache_path,
+        file_sha256_by_relative_path_map=module._plugin_file_sha256_by_relative_path_map_get(plugin_source_path),
+        marketplace_manifest_path=marketplace_manifest_path,
+        marketplace_name="provider-marketplace",
+        marketplace_worktree_root=marketplace_worktree_root.resolve(),
+        plugin_source_declaration_json=json.dumps(
+            plugin_source_declaration,
+            separators=(",", ":"),
+            sort_keys=True,
+        ),
+        source_path=plugin_source_path,
+    )
+
+    with pytest.raises(module.SkillBehaviorEvalError, match="manifest is invalid"):
+        module._plugin_source_path_validate("project-standards", plugin_source_binding)
+
+    marketplace_path, standard_codex_home = _plugin_binding_fixture_create(tmp_path / "preinstalled")
+    preinstalled_manifest_path = marketplace_path / "plugins/project-standards/.codex-plugin/plugin.json"
+    preinstalled_manifest_path.write_text(
+        '{"name":"project-standards","name":"other-provider","version":"0.1.0+codex.test"}\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(module.SkillBehaviorEvalError, match="plugin manifest is unavailable or invalid"):
+        module._preinstalled_plugin_source_binding_validate(
+            case_list=[],
+            marketplace_path_list=[marketplace_path],
+            plugin_selector_list=["project-standards@provider-marketplace"],
+            standard_codex_home=standard_codex_home,
+        )
+
+
+@pytest.mark.parametrize(
+    "manifest_text",
+    [
+        (
+            '{"name":"provider-marketplace","name":"other-marketplace",'
+            '"plugins":[{"name":"project-standards","source":{"source":"local",'
+            '"path":"./plugins/project-standards"}}]}\n'
+        ),
+        (
+            '{"name":"provider-marketplace","plugins":[{"name":"project-standards",'
+            '"source":{"source":"local","source":"git",'
+            '"path":"./plugins/project-standards"}}]}\n'
+        ),
+    ],
+    ids=["duplicate-marketplace-identity", "duplicate-plugin-source-key"],
+)
+def test_preinstalled_plugin_binding_rejects_duplicate_manifest_keys(
+    manifest_text: str,
+    tmp_path: Path,
+) -> None:
+    """Marketplace identity and plugin source objects reject duplicate keys.
+
+    Args:
+        manifest_text: Marketplace manifest with one repeated identity-bearing key.
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    marketplace_path, standard_codex_home = _plugin_binding_fixture_create(tmp_path)
+    (marketplace_path / ".agents/plugins/marketplace.json").write_text(manifest_text, encoding="utf-8")
+
+    with pytest.raises(module.SkillBehaviorEvalError, match="manifest is unavailable or invalid"):
+        module._preinstalled_plugin_source_binding_validate(
+            case_list=[],
+            marketplace_path_list=[marketplace_path],
+            plugin_selector_list=["project-standards@provider-marketplace"],
+            standard_codex_home=standard_codex_home,
+        )
+
+
+def test_preinstalled_plugin_binding_rejects_symlinked_marketplace_manifest(tmp_path: Path) -> None:
+    """The marketplace manifest must be one physical nonsymbolic file.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    marketplace_path, standard_codex_home = _plugin_binding_fixture_create(tmp_path)
+    marketplace_manifest_path = marketplace_path / ".agents/plugins/marketplace.json"
+    external_manifest_path = tmp_path / "external-marketplace.json"
+    external_manifest_path.write_bytes(marketplace_manifest_path.read_bytes())
+    marketplace_manifest_path.unlink()
+    marketplace_manifest_path.symlink_to(external_manifest_path)
+
+    with pytest.raises(module.SkillBehaviorEvalError, match="canonical physical nonsymbolic"):
+        module._preinstalled_plugin_source_binding_validate(
+            case_list=[],
+            marketplace_path_list=[marketplace_path],
+            plugin_selector_list=["project-standards@provider-marketplace"],
+            standard_codex_home=standard_codex_home,
+        )
 
 
 def test_standard_codex_environment_preserves_real_home_and_unset_override(
@@ -1514,7 +3280,7 @@ def test_codex_invocation_uses_standard_home_persistent_session_and_native_wait(
     environment = {"HOME": "/home/test-user", "PATH": "/usr/bin"}
     run_call_list: list[tuple[list[str], dict[str, Any]]] = []
 
-    def _run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+    def _run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
         run_call_list.append((command, kwargs))
         output_path = Path(command[command.index("--output-last-message") + 1])
         output_path.write_text('{"response":"ok"}\n', encoding="utf-8")
@@ -1525,8 +3291,8 @@ def test_codex_invocation_uses_standard_home_persistent_session_and_native_wait(
         return subprocess.CompletedProcess(
             command,
             0,
-            stdout="\n".join(json.dumps(event) for event in event_list) + "\n",
-            stderr="",
+            stdout=("\n".join(json.dumps(event) for event in event_list) + "\n").encode("utf-8"),
+            stderr=b"",
         )
 
     monkeypatch.setattr(module, "_standard_codex_process_environment_get", lambda: environment)
@@ -1548,6 +3314,340 @@ def test_codex_invocation_uses_standard_home_persistent_session_and_native_wait(
     assert run_keyword_by_name_map["env"] == environment
     assert "CODEX_HOME" not in run_keyword_by_name_map["env"]
     assert "timeout" not in run_keyword_by_name_map
+    assert run_keyword_by_name_map["input"] == b"prompt"
+    assert "text" not in run_keyword_by_name_map
+
+
+@pytest.mark.parametrize(
+    ("return_code", "output_text", "error_code"),
+    [
+        (17, '{"response":"unused"}\n', "codex-process-failed"),
+        (0, "not-json\n", "codex-output-invalid"),
+    ],
+)
+def test_codex_invocation_failure_extracts_usage_before_completion_validation(
+    error_code: str,
+    monkeypatch: pytest.MonkeyPatch,
+    output_text: str,
+    return_code: int,
+    tmp_path: Path,
+) -> None:
+    """Nonzero completion and malformed output retain exact usage extracted first.
+
+    Args:
+        error_code: Expected closed invocation failure code.
+        monkeypatch: Pytest mutation fixture.
+        output_text: Structured-output file contents.
+        return_code: Simulated Codex process return code.
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+
+    def _run(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        """Return one completed process with exact usage and selected output.
+
+        Args:
+            command: Direct process arguments.
+            _kwargs: Process keyword arguments.
+
+        Returns:
+            Simulated completed Codex process.
+        """
+
+        output_path = Path(command[command.index("--output-last-message") + 1])
+        output_path.write_text(output_text, encoding="utf-8")
+        event_list = [
+            {"type": "thread.started", "thread_id": "thread-id"},
+            {"type": "turn.completed", "usage": _codex_usage_payload()},
+        ]
+        return subprocess.CompletedProcess(
+            command,
+            return_code,
+            stdout=("\n".join(json.dumps(event) for event in event_list) + "\n").encode("utf-8"),
+            stderr=b"raw-stderr-secret",
+        )
+
+    monkeypatch.setattr(module, "_standard_codex_process_environment_get", lambda: {"HOME": "/home/test-user"})
+    monkeypatch.setattr(module.subprocess, "run", _run)
+
+    with pytest.raises(module.ModelInvocationError) as error_info:
+        module._codex_payload_get(
+            "prompt",
+            tmp_path,
+            {"type": "object"},
+            module.ModelInvocationConfig(codex_bin="codex", model="gpt-5.6-sol", reasoning_effort="max"),
+        )
+
+    assert error_info.value.failure.error_code == error_code
+    assert error_info.value.failure.usage == module.CodexUsage(**_codex_usage_payload())
+    assert "raw-stderr-secret" not in str(error_info.value)
+
+
+@pytest.mark.parametrize(
+    "output_text",
+    [
+        '{"activated_skill_list":[],"activated_skill_list":["other"],"response":"ok"}\n',
+        ('{"invariant_result_list":[{"id":"bounded","passed":true,' '"passed":false,"reason":"duplicate"}]}\n'),
+    ],
+    ids=["generation-root-activation", "judge-nested-invariant"],
+)
+def test_codex_invocation_rejects_duplicate_output_keys_with_usage(
+    monkeypatch: pytest.MonkeyPatch,
+    output_text: str,
+    tmp_path: Path,
+) -> None:
+    """Generated and judge output reject duplicates after retaining exact usage.
+
+    Args:
+        monkeypatch: Pytest mutation fixture.
+        output_text: Model output with one duplicate key.
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+
+    def _run(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        """Write duplicate output and return one exact completed usage event."""
+
+        output_path = Path(command[command.index("--output-last-message") + 1])
+        output_path.write_text(output_text, encoding="utf-8")
+        event = {"type": "turn.completed", "usage": _codex_usage_payload()}
+        return subprocess.CompletedProcess(command, 0, stdout=(json.dumps(event) + "\n").encode("utf-8"), stderr=b"")
+
+    monkeypatch.setattr(module, "_standard_codex_process_environment_get", lambda: {"HOME": "/home/test-user"})
+    monkeypatch.setattr(module.subprocess, "run", _run)
+
+    with pytest.raises(module.ModelInvocationError) as error_info:
+        module._codex_payload_get(
+            "prompt",
+            tmp_path,
+            {"type": "object"},
+            module.ModelInvocationConfig(codex_bin="codex", model="gpt-5.6-sol", reasoning_effort="max"),
+        )
+
+    assert error_info.value.failure.error_code == "codex-output-invalid"
+    assert error_info.value.failure.usage == module.CodexUsage(**_codex_usage_payload())
+
+
+@pytest.mark.parametrize("stream_name", ["output", "stderr"])
+@pytest.mark.parametrize("failure_stage", ["generation", "judge"])
+def test_case_evaluate_closes_invalid_utf8_stream_with_stage_usage(
+    failure_stage: str,
+    monkeypatch: pytest.MonkeyPatch,
+    stream_name: str,
+    tmp_path: Path,
+) -> None:
+    """Invalid UTF-8 generation and judge streams retain already extracted usage.
+
+    Args:
+        failure_stage: Model stage that emits invalid UTF-8.
+        monkeypatch: Pytest mutation fixture.
+        stream_name: Invalid process stream or output file.
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    corpus_path = tmp_path / "skill_behavior_eval/corpus-v1.json"
+    corpus_path.parent.mkdir()
+    _corpus_write(corpus_path, expected_skill_list=[], forbidden_skill_list=[])
+    case = module._corpus_case_list_load(corpus_path)[0]
+    invocation_count = 0
+    real_subprocess_run = subprocess.run
+
+    def _run(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        """Write valid generation or invalid selected-stage output with exact usage."""
+
+        nonlocal invocation_count
+        if command[0] == "git":
+            return real_subprocess_run(command, **_kwargs)
+        invocation_count += 1
+        current_stage = "generation" if invocation_count == 1 else "judge"
+        output_path = Path(command[command.index("--output-last-message") + 1])
+        if current_stage == failure_stage and stream_name == "output":
+            output_path.write_bytes(b"\xff")
+        elif current_stage == "generation":
+            output_path.write_text(
+                '{"activated_skill_list":[],"response":"Read-only response."}\n',
+                encoding="utf-8",
+            )
+        else:
+            output_path.write_text(
+                '{"invariant_result_list":[{"id":"bounded","passed":true,"reason":"Read-only."}]}\n',
+                encoding="utf-8",
+            )
+        event = {"type": "turn.completed", "usage": _codex_usage_payload(invocation_count)}
+        stderr = b"\xff" if current_stage == failure_stage and stream_name == "stderr" else b""
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=(json.dumps(event) + "\n").encode("utf-8"),
+            stderr=stderr,
+        )
+
+    monkeypatch.setattr(module, "_standard_codex_process_environment_get", lambda: {"HOME": "/home/test-user"})
+    monkeypatch.setattr(module.subprocess, "run", _run)
+
+    with pytest.raises(module.SkillBehaviorCaseEvaluationError) as error_info:
+        module._case_evaluate(
+            case,
+            invocation_config=module.ModelInvocationConfig(
+                codex_bin="codex",
+                model="gpt-5.6-sol",
+                reasoning_effort="medium",
+            ),
+            plugin_source_binding_by_name_map={},
+        )
+
+    failure = error_info.value.failure
+    assert failure.error_code == "codex-output-invalid"
+    assert failure.codex_usage_generation == module.CodexUsage(**_codex_usage_payload())
+    assert failure.codex_usage_judge == (
+        module.CodexUsage(**_codex_usage_payload(2)) if failure_stage == "judge" else None
+    )
+
+
+@pytest.mark.parametrize(
+    ("failure_stage", "error_code"),
+    [("generation", "codex-process-failed"), ("judge", "codex-output-invalid")],
+)
+def test_case_evaluate_carries_typed_invocation_usage_for_each_model_stage(
+    error_code: str,
+    failure_stage: str,
+    tmp_path: Path,
+) -> None:
+    """Generation and judge invocation failures retain their available exact usage.
+
+    Args:
+        error_code: Expected closed invocation failure code.
+        failure_stage: Model stage that fails.
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    corpus_path = tmp_path / "skill_behavior_eval/corpus-v1.json"
+    corpus_path.parent.mkdir()
+    _corpus_write(corpus_path, expected_skill_list=[], forbidden_skill_list=[])
+    case = module._corpus_case_list_load(corpus_path)[0]
+    call_count = 0
+
+    def _model_call(*_args: Any) -> Any:
+        """Return generation or raise one typed stage failure.
+
+        Returns:
+            Valid generation invocation when the judge stage is selected.
+        """
+
+        nonlocal call_count
+        call_count += 1
+        if failure_stage == "judge" and call_count == 1:
+            return module.ModelInvocationResult(
+                payload={"activated_skill_list": [], "response": "Read-only response."},
+                usage=module.CodexUsage(**_codex_usage_payload()),
+            )
+        raise module.ModelInvocationError(
+            module.ModelInvocationFailure(
+                error_code=error_code,
+                error_message={
+                    "codex-output-invalid": "Codex structured output is invalid.",
+                    "codex-process-failed": "Codex invocation completed unsuccessfully.",
+                }[error_code],
+                usage=module.CodexUsage(**_codex_usage_payload(2)),
+            )
+        )
+
+    with pytest.raises(module.SkillBehaviorCaseEvaluationError) as error_info:
+        module._case_evaluate(
+            case,
+            invocation_config=module.ModelInvocationConfig(
+                codex_bin="codex",
+                model="gpt-5.6-sol",
+                reasoning_effort="medium",
+            ),
+            plugin_source_binding_by_name_map={},
+            model_call=_model_call,
+        )
+
+    failure = error_info.value.failure
+    assert failure.error_code == error_code
+    if failure_stage == "generation":
+        assert failure.codex_usage_generation == module.CodexUsage(**_codex_usage_payload(2))
+        assert failure.codex_usage_judge is None
+    else:
+        assert failure.codex_usage_generation == module.CodexUsage(**_codex_usage_payload())
+        assert failure.codex_usage_judge == module.CodexUsage(**_codex_usage_payload(2))
+
+
+def test_non_acceptance_surfaces_redact_raw_codex_streams(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Console and non-acceptance JSON never expose raw Codex stream sentinels.
+
+    Args:
+        capsys: Pytest output capture fixture.
+        monkeypatch: Pytest mutation fixture.
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    corpus_path = tmp_path / "skill_behavior_eval/corpus-v1.json"
+    corpus_path.parent.mkdir()
+    _corpus_write(corpus_path, expected_skill_list=[], forbidden_skill_list=[])
+    case = module._corpus_case_list_load(corpus_path)[0]
+    stdout_secret = "stdout-secret-sentinel"
+    stderr_secret = "stderr-secret-sentinel"
+    real_subprocess_run = subprocess.run
+
+    def _run(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        """Return one nonzero process containing both stream sentinels.
+
+        Args:
+            command: Direct process arguments.
+            _kwargs: Process keyword arguments.
+
+        Returns:
+            Simulated failed Codex process with exact usage.
+        """
+
+        if command[0] == "git":
+            return real_subprocess_run(command, **_kwargs)
+        event_list = [
+            {"type": "item.completed", "text": stdout_secret},
+            {"type": "turn.completed", "usage": _codex_usage_payload()},
+        ]
+        return subprocess.CompletedProcess(
+            command,
+            9,
+            stdout=("\n".join(json.dumps(event) for event in event_list) + "\n").encode("utf-8"),
+            stderr=stderr_secret.encode("utf-8"),
+        )
+
+    monkeypatch.setattr(module, "_standard_codex_process_environment_get", lambda: {"HOME": "/home/test-user"})
+    monkeypatch.setattr(module.subprocess, "run", _run)
+    invocation_config = module.ModelInvocationConfig(
+        codex_bin="codex",
+        model="gpt-5.6-sol",
+        reasoning_effort="max",
+    )
+    evaluation_attempt = module._case_list_evaluate(
+        [case],
+        concurrency=1,
+        invocation_config=invocation_config,
+        plugin_source_binding_by_name_map={},
+    )
+    payload = evaluation_attempt.non_acceptance_payload_get(invocation_config)
+    output_path = tmp_path / "non-acceptance.json"
+    module._result_output_publish(output_path, payload)
+    console_output = capsys.readouterr().out
+    serialized_payload = output_path.read_text(encoding="utf-8")
+
+    assert payload["case_usage_list"][0]["codex_usage_generation"] == _codex_usage_payload()
+    assert payload["case_usage_list"][0]["error_code"] == "codex-process-failed"
+    for sentinel in (stdout_secret, stderr_secret):
+        assert sentinel not in console_output
+        assert sentinel not in serialized_payload
 
 
 @pytest.mark.parametrize(
@@ -1594,6 +3694,31 @@ def test_codex_usage_requires_one_exact_structured_completion_event(
         module._codex_usage_get(event_jsonl)
 
 
+@pytest.mark.parametrize(
+    "event_jsonl",
+    [
+        '{"type":"turn.completed","type":"turn.completed","usage":{}}',
+        (
+            '{"type":"turn.completed","usage":{"cached_input_tokens":2,'
+            '"cache_write_input_tokens":3,"input_tokens":10,"input_tokens":11,'
+            '"output_tokens":5,"reasoning_output_tokens":4}}'
+        ),
+    ],
+    ids=["event-root", "usage-nested"],
+)
+def test_codex_usage_rejects_duplicate_jsonl_keys(event_jsonl: str) -> None:
+    """Codex JSONL event and nested usage objects reject duplicate keys.
+
+    Args:
+        event_jsonl: One event line with a duplicate object key.
+    """
+
+    module = _module_load()
+
+    with pytest.raises(module.SkillBehaviorEvalError, match="invalid JSON"):
+        module._codex_usage_get(event_jsonl)
+
+
 def test_preinstalled_plugin_binding_accepts_exact_server_cache(tmp_path: Path) -> None:
     """Evaluation accepts one exact source already prepared in the standard home."""
 
@@ -1605,12 +3730,68 @@ def test_preinstalled_plugin_binding_accepts_exact_server_cache(tmp_path: Path) 
         forbidden_skill_list=["project-standards:pytest-developer"],
     )
 
-    module._preinstalled_plugin_source_binding_validate(
+    plugin_source_binding_by_name_map = module._preinstalled_plugin_source_binding_validate(
         case_list=module._selected_case_list_get(case_id_list=[], corpus_path_list=[corpus_path]),
         marketplace_path_list=[marketplace_path],
         plugin_selector_list=["project-standards@provider-marketplace"],
         standard_codex_home=standard_codex_home,
     )
+
+    binding = plugin_source_binding_by_name_map["project-standards"]
+    assert binding.marketplace_manifest_path == marketplace_path / ".agents/plugins/marketplace.json"
+    assert binding.marketplace_name == "provider-marketplace"
+    assert binding.marketplace_worktree_root == marketplace_path.resolve()
+    assert binding.plugin_source_declaration_json == (
+        '{"name":"project-standards","source":{"path":"./plugins/project-standards","source":"local"}}'
+    )
+    assert binding.source_path == (marketplace_path / "plugins/project-standards").resolve()
+    assert binding.cache_path == next(standard_codex_home.glob("plugins/cache/*/*/*")).resolve()
+    assert binding.file_sha256_by_relative_path_map == module._plugin_file_sha256_by_relative_path_map_get(
+        binding.source_path
+    )
+
+
+@pytest.mark.parametrize("owner_kind", ["non-git", "copied-worktree", "symlink", "noncanonical"])
+def test_preinstalled_plugin_binding_rejects_invalid_marketplace_worktree_owner(
+    owner_kind: str,
+    tmp_path: Path,
+) -> None:
+    """A marketplace path must itself be one physical registered Git worktree.
+
+    Args:
+        owner_kind: Invalid marketplace owner shape.
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    marketplace_path, standard_codex_home = _plugin_binding_fixture_create(tmp_path)
+    if owner_kind == "non-git":
+        (marketplace_path / ".git").rename(tmp_path / "removed-git-directory")
+        supplied_marketplace_path = marketplace_path
+        error_pattern = "plugin marketplace"
+    elif owner_kind == "copied-worktree":
+        _git_run(marketplace_path, ["add", "."])
+        _git_run(marketplace_path, ["commit", "-m", "Add marketplace fixture"])
+        linked_worktree = tmp_path / "linked-marketplace"
+        _git_run(marketplace_path, ["worktree", "add", "-b", "feature", str(linked_worktree), "HEAD"])
+        supplied_marketplace_path = tmp_path / "copied-marketplace"
+        shutil.copytree(linked_worktree, supplied_marketplace_path)
+        error_pattern = "registered worktree"
+    elif owner_kind == "symlink":
+        supplied_marketplace_path = tmp_path / "symbolic-marketplace"
+        supplied_marketplace_path.symlink_to(marketplace_path, target_is_directory=True)
+        error_pattern = "physical canonical path"
+    else:
+        supplied_marketplace_path = marketplace_path / ".." / marketplace_path.name
+        error_pattern = "physical canonical path"
+
+    with pytest.raises(module.SkillBehaviorEvalError, match=error_pattern):
+        module._preinstalled_plugin_source_binding_validate(
+            case_list=[],
+            marketplace_path_list=[supplied_marketplace_path],
+            plugin_selector_list=["project-standards@provider-marketplace"],
+            standard_codex_home=standard_codex_home,
+        )
 
 
 def test_preinstalled_plugin_binding_ignores_runtime_bytecode_cache(
@@ -1773,7 +3954,73 @@ def test_plugin_selector_rejects_traversal_and_open_identities(selector: str) ->
         module._plugin_selector_tuple_normalize([selector])
 
 
-@pytest.mark.parametrize("plugin_version", ["1", "01.0.0", "1.0.0/escape", "1.0.0+"])
+def test_activated_provider_binding_rejects_mismatched_and_ambiguous_sources(tmp_path: Path) -> None:
+    """One activated provider must resolve to one matching declared selector."""
+
+    module = _module_load()
+
+    with pytest.raises(module.SkillBehaviorEvalError, match="ambiguous source bindings"):
+        module._plugin_selector_by_name_map_get(
+            [
+                "project-standards@first-marketplace",
+                "project-standards@second-marketplace",
+            ]
+        )
+    with pytest.raises(module.SkillBehaviorEvalError, match="identity is mismatched"):
+        marketplace_worktree_root = tmp_path / "mismatched-marketplace"
+        _repository_create(marketplace_worktree_root)
+        source_path = _plugin_source_path_create(
+            marketplace_worktree_root / "plugins/agent-workflows",
+            "agent-workflows",
+            ["python-developer"],
+        )
+        plugin_source_declaration = {
+            "name": "project-standards",
+            "source": {"source": "local", "path": "./plugins/agent-workflows"},
+        }
+        marketplace_manifest_path = marketplace_worktree_root / ".agents/plugins/marketplace.json"
+        marketplace_manifest_path.parent.mkdir(parents=True)
+        marketplace_manifest_path.write_text(
+            json.dumps({"name": "mismatched-marketplace", "plugins": [plugin_source_declaration]}) + "\n",
+            encoding="utf-8",
+        )
+        cache_path = _plugin_source_path_create(
+            tmp_path / "mismatched-provider-cache",
+            "agent-workflows",
+            ["python-developer"],
+        )
+        module._qualified_activated_skill_resolve(
+            "project-standards:python-developer",
+            plugin_source_binding_by_name_map={
+                "project-standards": module.PluginSourceBinding(
+                    cache_path=cache_path,
+                    file_sha256_by_relative_path_map=module._plugin_file_sha256_by_relative_path_map_get(source_path),
+                    marketplace_manifest_path=marketplace_manifest_path,
+                    marketplace_name="mismatched-marketplace",
+                    marketplace_worktree_root=marketplace_worktree_root.resolve(),
+                    plugin_source_declaration_json=json.dumps(
+                        plugin_source_declaration,
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    ),
+                    source_path=source_path,
+                )
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    "plugin_version",
+    ["1", "01.0.0", "1.0.0/escape", "1.0.0+", "1.0.٠", "1.0.0-1٠"],
+    ids=[
+        "incomplete-core",
+        "leading-zero-core",
+        "path-escape",
+        "empty-build",
+        "mixed-unicode-core",
+        "mixed-unicode-prerelease",
+    ],
+)
 def test_preinstalled_plugin_binding_rejects_invalid_manifest_version(
     tmp_path: Path,
     plugin_version: str,
@@ -1868,7 +4115,7 @@ def test_required_plugin_source_binding_rejects_an_omitted_expected_provider(
     ):
         module._required_plugin_source_binding_validate(
             case_list,
-            ["agent-workflows@agent-plugins"],
+            {"agent-workflows": "agent-workflows@agent-plugins"},
         )
 
 
@@ -1889,7 +4136,7 @@ def test_required_plugin_source_binding_rejects_an_omitted_forbidden_provider(
     with pytest.raises(module.SkillBehaviorEvalError, match="agent-workflows"):
         module._required_plugin_source_binding_validate(
             case_list,
-            ["project-standards@project-standards"],
+            {"project-standards": "project-standards@project-standards"},
         )
 
 
@@ -1915,8 +4162,8 @@ def test_required_plugin_source_binding_accepts_complete_provider_set(
 
     module._required_plugin_source_binding_validate(
         case_list,
-        [
-            "project-standards@project-standards",
-            "agent-workflows@agent-plugins",
-        ],
+        {
+            "project-standards": "project-standards@project-standards",
+            "agent-workflows": "agent-workflows@agent-plugins",
+        },
     )

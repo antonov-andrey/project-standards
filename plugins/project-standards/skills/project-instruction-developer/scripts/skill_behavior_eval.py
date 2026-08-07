@@ -11,12 +11,17 @@ import pwd
 import re
 import subprocess
 import tempfile
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
+
+import yaml
+from yaml.events import AliasEvent, NodeEvent
+from yaml.nodes import MappingNode, ScalarNode
 
 DEFAULT_MODEL = "gpt-5.6-sol"
 DEFAULT_REASONING_EFFORT = "max"
@@ -26,12 +31,18 @@ WORKING_DIRECTORY_MODE_SET = {"same-branch", "synchronized-main"}
 
 _PLUGIN_IDENTITY_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 _SEMVER_PATTERN = re.compile(
-    r"(0|[1-9]\d*)\."
-    r"(0|[1-9]\d*)\."
-    r"(0|[1-9]\d*)"
-    r"(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\."
-    r"(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?"
+    r"(0|[1-9][0-9]*)\."
+    r"(0|[1-9][0-9]*)\."
+    r"(0|[1-9][0-9]*)"
+    r"(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\."
+    r"(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?"
     r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
+)
+_YAML_12_NON_STRING_PLAIN_SCALAR_PATTERN = re.compile(
+    r"(?:~|null|Null|NULL|true|True|TRUE|false|False|FALSE|"
+    r"[-+]?[0-9]+|0o[0-7]+|0x[0-9a-fA-F]+|"
+    r"[-+]?(?:(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)(?:[eE][-+]?[0-9]+)?|"
+    r"\.inf|\.Inf|\.INF)|\.nan|\.NaN|\.NAN)"
 )
 
 _GENERATION_OUTPUT_SCHEMA: dict[str, Any] = {
@@ -46,6 +57,21 @@ _GENERATION_OUTPUT_SCHEMA: dict[str, Any] = {
         },
         "response": {"type": "string", "minLength": 1},
     },
+}
+_SKILL_FRONTMATTER_FIELD_SET = {"description", "name"}
+
+_CASE_FAILURE_MESSAGE_BY_CODE_MAP = {
+    "case-internal-failure": "Case evaluation failed internally.",
+    "case-not-submitted": "Case evaluation was not submitted.",
+    "case-submission-failed": "Case evaluation submission failed.",
+    "codex-invocation-start-failed": "Codex invocation could not start.",
+    "codex-output-invalid": "Codex structured output is invalid.",
+    "codex-process-failed": "Codex invocation completed unsuccessfully.",
+    "codex-usage-invalid": "Codex completion usage is invalid.",
+    "generation-validation-failed": "Generation result validation failed.",
+    "judge-validation-failed": "Judge result validation failed.",
+    "project-binding-drift": "Evaluated project binding changed during evaluation.",
+    "provider-binding-drift": "Provider source binding changed during evaluation.",
 }
 
 _JUDGE_OUTPUT_SCHEMA: dict[str, Any] = {
@@ -84,6 +110,93 @@ class SemanticInvariant:
 
 
 @dataclass(frozen=True, slots=True)
+class ProjectEvaluationBinding:
+    """Bind one evaluated directory to its exact Git worktree identity."""
+
+    branch_ref: str
+    git_common_directory: Path
+    git_common_directory_device_number: int
+    git_common_directory_inode_number: int
+    working_directory: Path
+    working_directory_device_number: int
+    working_directory_inode_number: int
+    working_directory_mode: str
+    worktree_root: Path
+    worktree_root_device_number: int
+    worktree_root_inode_number: int
+
+    def validate(self) -> None:
+        """Reprove the exact physical directory, worktree owner, branch, and mode."""
+
+        if self.working_directory_mode not in WORKING_DIRECTORY_MODE_SET:
+            raise SkillBehaviorEvalError("evaluated project binding has an unsupported working directory mode")
+        try:
+            resolved_working_directory = self.working_directory.resolve(strict=True)
+            resolved_working_directory.relative_to(self.worktree_root)
+            working_directory_status = self.working_directory.stat()
+        except (OSError, ValueError) as error:
+            raise SkillBehaviorEvalError("evaluated project binding drifted") from error
+        if (
+            self.working_directory.is_symlink()
+            or not resolved_working_directory.is_dir()
+            or Path(os.path.abspath(self.working_directory)) != resolved_working_directory
+            or working_directory_status.st_dev != self.working_directory_device_number
+            or working_directory_status.st_ino != self.working_directory_inode_number
+        ):
+            raise SkillBehaviorEvalError("evaluated project binding drifted")
+        try:
+            actual_worktree_root = _physical_git_worktree_root_get(
+                resolved_working_directory,
+                context="evaluated project binding",
+            )
+            actual_git_common_directory = _git_common_directory_get(
+                actual_worktree_root,
+                context="evaluated project binding",
+            )
+            actual_branch_ref = _git_output_get(
+                actual_worktree_root,
+                ["symbolic-ref", "--quiet", "HEAD"],
+                context="evaluated project binding",
+            ).strip()
+            actual_git_common_directory_status = actual_git_common_directory.stat()
+            actual_worktree_root_status = actual_worktree_root.stat()
+        except (OSError, SkillBehaviorEvalError) as error:
+            raise SkillBehaviorEvalError("evaluated project binding drifted") from error
+        if (
+            actual_worktree_root != self.worktree_root
+            or actual_git_common_directory != self.git_common_directory
+            or actual_branch_ref != self.branch_ref
+            or not self.branch_ref.startswith("refs/heads/")
+            or actual_git_common_directory_status.st_dev != self.git_common_directory_device_number
+            or actual_git_common_directory_status.st_ino != self.git_common_directory_inode_number
+            or actual_worktree_root_status.st_dev != self.worktree_root_device_number
+            or actual_worktree_root_status.st_ino != self.worktree_root_inode_number
+        ):
+            raise SkillBehaviorEvalError("evaluated project binding drifted")
+        if self.working_directory_mode == "synchronized-main":
+            if self.branch_ref != "refs/heads/main":
+                raise SkillBehaviorEvalError("evaluated project binding drifted")
+            if _git_output_get(
+                self.worktree_root,
+                ["status", "--porcelain"],
+                context="evaluated project binding",
+            ):
+                raise SkillBehaviorEvalError("evaluated project binding drifted")
+            local_commit = _git_output_get(
+                self.worktree_root,
+                ["rev-parse", "HEAD"],
+                context="evaluated project binding",
+            ).strip()
+            upstream_commit = _git_output_get(
+                self.worktree_root,
+                ["rev-parse", "refs/remotes/origin/main"],
+                context="evaluated project binding",
+            ).strip()
+            if local_commit != upstream_commit:
+                raise SkillBehaviorEvalError("evaluated project binding drifted")
+
+
+@dataclass(frozen=True, slots=True)
 class SkillBehaviorCase:
     """Store one resolved activation and output-evaluation scenario."""
 
@@ -92,6 +205,7 @@ class SkillBehaviorCase:
     forbidden_skill_list: tuple[str, ...]
     id: str
     prompt: str
+    project_evaluation_binding: ProjectEvaluationBinding
     semantic_invariant_list: tuple[SemanticInvariant, ...]
     suite: str
     working_directory: Path
@@ -187,6 +301,139 @@ class ModelInvocationResult:
 
 
 @dataclass(frozen=True, slots=True)
+class PluginSourceBinding:
+    """Bind one provider source and cache to their validated file snapshot."""
+
+    cache_path: Path
+    file_sha256_by_relative_path_map: Mapping[str, str]
+    marketplace_manifest_path: Path
+    marketplace_name: str
+    marketplace_worktree_root: Path
+    plugin_source_declaration_json: str
+    source_path: Path
+
+    def __post_init__(self) -> None:
+        """Freeze one validated file map inside the immutable provider binding."""
+
+        object.__setattr__(
+            self,
+            "file_sha256_by_relative_path_map",
+            MappingProxyType(dict(self.file_sha256_by_relative_path_map)),
+        )
+
+    def validate(self, *, plugin_name: str) -> None:
+        """Revalidate both physical trees against the exact accepted snapshot.
+
+        Args:
+            plugin_name: Provider identity owned by this binding.
+        """
+
+        try:
+            marketplace_worktree_root = _physical_git_worktree_root_get(
+                self.marketplace_worktree_root,
+                context=f"provider marketplace binding drifted: {plugin_name}",
+            )
+            self.source_path.relative_to(marketplace_worktree_root)
+        except (OSError, SkillBehaviorEvalError, ValueError) as error:
+            raise SkillBehaviorEvalError(f"provider source binding drifted: {plugin_name}") from error
+        if marketplace_worktree_root != self.marketplace_worktree_root:
+            raise SkillBehaviorEvalError(f"provider source binding drifted: {plugin_name}")
+        expected_marketplace_manifest_path = marketplace_worktree_root / ".agents/plugins/marketplace.json"
+        try:
+            resolved_marketplace_manifest_path = self.marketplace_manifest_path.resolve(strict=True)
+            self.marketplace_manifest_path.relative_to(marketplace_worktree_root)
+            marketplace_manifest_link_count = self.marketplace_manifest_path.stat().st_nlink
+        except (OSError, ValueError) as error:
+            raise SkillBehaviorEvalError(f"provider source binding drifted: {plugin_name}") from error
+        if (
+            self.marketplace_manifest_path != expected_marketplace_manifest_path
+            or self.marketplace_manifest_path.is_symlink()
+            or not resolved_marketplace_manifest_path.is_file()
+            or marketplace_manifest_link_count != 1
+            or Path(os.path.abspath(self.marketplace_manifest_path)) != resolved_marketplace_manifest_path
+        ):
+            raise SkillBehaviorEvalError(f"provider source binding drifted: {plugin_name}")
+        try:
+            marketplace_payload = _json_duplicate_rejecting_load(
+                self.marketplace_manifest_path.read_text(encoding="utf-8"),
+                context=f"provider marketplace binding drifted: {plugin_name}",
+            )
+        except (OSError, UnicodeDecodeError, SkillBehaviorEvalError) as error:
+            raise SkillBehaviorEvalError(f"provider source binding drifted: {plugin_name}") from error
+        if not isinstance(marketplace_payload, dict) or marketplace_payload.get("name") != self.marketplace_name:
+            raise SkillBehaviorEvalError(f"provider source binding drifted: {plugin_name}")
+        plugin_list = marketplace_payload.get("plugins")
+        selected_plugin_list = (
+            [plugin for plugin in plugin_list if isinstance(plugin, dict) and plugin.get("name") == plugin_name]
+            if isinstance(plugin_list, list)
+            else []
+        )
+        if (
+            len(selected_plugin_list) != 1
+            or json.dumps(selected_plugin_list[0], separators=(",", ":"), sort_keys=True)
+            != self.plugin_source_declaration_json
+        ):
+            raise SkillBehaviorEvalError(f"provider source binding drifted: {plugin_name}")
+        source = selected_plugin_list[0].get("source")
+        if not isinstance(source, dict) or not isinstance(source.get("path"), str):
+            raise SkillBehaviorEvalError(f"provider source binding drifted: {plugin_name}")
+        raw_plugin_source_path = marketplace_worktree_root / source["path"]
+        try:
+            current_plugin_source_path = raw_plugin_source_path.resolve(strict=True)
+            current_plugin_source_path.relative_to(marketplace_worktree_root)
+        except (OSError, ValueError) as error:
+            raise SkillBehaviorEvalError(f"provider source binding drifted: {plugin_name}") from error
+        if (
+            source.get("source") != "local"
+            or Path(os.path.abspath(raw_plugin_source_path)) != current_plugin_source_path
+            or current_plugin_source_path != self.source_path
+        ):
+            raise SkillBehaviorEvalError(f"provider source binding drifted: {plugin_name}")
+        for path in (self.source_path, self.cache_path):
+            try:
+                resolved_path = path.resolve(strict=True)
+            except OSError as error:
+                raise SkillBehaviorEvalError(f"provider source binding drifted: {plugin_name}") from error
+            if Path(os.path.abspath(path)) != resolved_path or path.is_symlink() or not resolved_path.is_dir():
+                raise SkillBehaviorEvalError(f"provider source binding drifted: {plugin_name}")
+            try:
+                current_file_sha256_by_relative_path_map = _plugin_file_sha256_by_relative_path_map_get(path)
+            except (OSError, SkillBehaviorEvalError) as error:
+                raise SkillBehaviorEvalError(f"provider source binding drifted: {plugin_name}") from error
+            if current_file_sha256_by_relative_path_map != self.file_sha256_by_relative_path_map:
+                raise SkillBehaviorEvalError(f"provider source binding drifted: {plugin_name}")
+
+
+@dataclass(frozen=True, slots=True)
+class ModelInvocationFailure:
+    """Carry one sanitized invocation failure and optional exact usage."""
+
+    error_code: str
+    error_message: str
+    usage: CodexUsage | None
+
+    def __post_init__(self) -> None:
+        """Require one exact closed failure identity."""
+
+        if _CASE_FAILURE_MESSAGE_BY_CODE_MAP.get(self.error_code) != self.error_message:
+            raise SkillBehaviorEvalError("Model invocation failure identity is not closed")
+
+
+class ModelInvocationError(SkillBehaviorEvalError):
+    """Transport one sanitized invocation failure without raw process output."""
+
+    def __init__(self, failure: ModelInvocationFailure) -> None:
+        """Store one closed invocation failure.
+
+        Args:
+            failure: Sanitized invocation failure and optional usage.
+        """
+
+        super().__init__(failure.error_message)
+        self.failure = failure
+
+
+@dataclass(frozen=True, slots=True)
 class SemanticInvariantResult:
     """Store one judge verdict."""
 
@@ -211,7 +458,261 @@ class SkillBehaviorCaseResult:
     suite: str
 
 
+@dataclass(frozen=True, slots=True)
+class SkillBehaviorCaseFailure:
+    """Preserve one failed case and every exact counter available at failure."""
+
+    codex_usage_generation: CodexUsage | None
+    codex_usage_judge: CodexUsage | None
+    error_code: str
+    error_message: str
+    id: str
+    suite: str
+
+    def __post_init__(self) -> None:
+        """Require one exact closed failure identity."""
+
+        if _CASE_FAILURE_MESSAGE_BY_CODE_MAP.get(self.error_code) != self.error_message:
+            raise SkillBehaviorEvalError("Case failure identity is not closed")
+
+
+class SkillBehaviorCaseEvaluationError(SkillBehaviorEvalError):
+    """Transport one typed case failure without discarding completed usage."""
+
+    def __init__(self, failure: SkillBehaviorCaseFailure) -> None:
+        """Store one closed failed-case value.
+
+        Args:
+            failure: Failed case and available exact counters.
+        """
+
+        super().__init__(failure.error_message)
+        self.failure = failure
+
+
+@dataclass(frozen=True, slots=True)
+class SkillBehaviorCaseAttempt:
+    """Contain exactly one successful result or one failed case."""
+
+    failure: SkillBehaviorCaseFailure | None
+    result: SkillBehaviorCaseResult | None
+
+    def __post_init__(self) -> None:
+        """Require exactly one terminal case outcome."""
+
+        if (self.failure is None) == (self.result is None):
+            raise SkillBehaviorEvalError("Case attempt must contain exactly one result or failure")
+
+
+@dataclass(frozen=True, slots=True)
+class SkillBehaviorEvaluationAttempt:
+    """Own all terminal case attempts from one fully drained submission set."""
+
+    case_attempt_list: tuple[SkillBehaviorCaseAttempt, ...]
+
+    def have_failure(self) -> bool:
+        """Return whether any submitted case failed before an acceptance result.
+
+        Returns:
+            True when at least one case attempt failed.
+        """
+
+        return any(attempt.failure is not None for attempt in self.case_attempt_list)
+
+    def non_acceptance_payload_get(self, invocation_config: ModelInvocationConfig) -> dict[str, Any]:
+        """Build one closed record that cannot represent an accepted evaluation.
+
+        Args:
+            invocation_config: Exact model invocation configuration.
+
+        Returns:
+            Closed non-acceptance attempt payload with all available exact counters.
+        """
+
+        if not self.have_failure():
+            raise SkillBehaviorEvalError("A successful evaluation cannot emit a non-acceptance attempt")
+        codex_usage = CodexUsage(
+            cached_input_tokens=0,
+            cache_write_input_tokens=0,
+            input_tokens=0,
+            output_tokens=0,
+            reasoning_output_tokens=0,
+        )
+        case_usage_list: list[dict[str, Any]] = []
+        for attempt in self.case_attempt_list:
+            if attempt.failure is not None:
+                failure = attempt.failure
+                generation_usage = failure.codex_usage_generation
+                judge_usage = failure.codex_usage_judge
+                case_usage_list.append(
+                    {
+                        "codex_usage_generation": asdict(generation_usage) if generation_usage is not None else None,
+                        "codex_usage_judge": asdict(judge_usage) if judge_usage is not None else None,
+                        "error_code": failure.error_code,
+                        "error_message": failure.error_message,
+                        "id": failure.id,
+                        "outcome": "failed",
+                        "suite": failure.suite,
+                    }
+                )
+            else:
+                if attempt.result is None:
+                    raise SkillBehaviorEvalError("Case attempt result is absent")
+                result = attempt.result
+                generation_usage = result.codex_usage_generation
+                judge_usage = result.codex_usage_judge
+                case_usage_list.append(
+                    {
+                        "codex_usage_generation": asdict(generation_usage),
+                        "codex_usage_judge": asdict(judge_usage),
+                        "error_code": None,
+                        "error_message": None,
+                        "id": result.id,
+                        "outcome": "completed",
+                        "suite": result.suite,
+                    }
+                )
+            if generation_usage is not None:
+                codex_usage = codex_usage.add(generation_usage)
+            if judge_usage is not None:
+                codex_usage = codex_usage.add(judge_usage)
+        return {
+            "case_usage_list": case_usage_list,
+            "codex_usage": asdict(codex_usage),
+            "failure_count": sum(attempt.failure is not None for attempt in self.case_attempt_list),
+            "model": invocation_config.model,
+            "reasoning_effort": invocation_config.reasoning_effort,
+            "record_type": "skill-behavior-evaluation-non-acceptance",
+            "run_timestamp": datetime.now(UTC).isoformat(),
+            "schema_version": 1,
+            "total_case_count": len(self.case_attempt_list),
+        }
+
+    def result_list_get(self) -> list[SkillBehaviorCaseResult]:
+        """Return every successful result only for an acceptance-eligible attempt.
+
+        Returns:
+            Successful results in corpus order.
+        """
+
+        if self.have_failure():
+            raise SkillBehaviorEvalError("A failed evaluation attempt has no acceptance result list")
+        return [attempt.result for attempt in self.case_attempt_list if attempt.result is not None]
+
+    def project_binding_drift_get(self) -> SkillBehaviorEvaluationAttempt:
+        """Convert every terminal case to one typed project-drift non-acceptance.
+
+        Returns:
+            A closed non-acceptance attempt with all completed usage preserved.
+        """
+
+        case_attempt_list: list[SkillBehaviorCaseAttempt] = []
+        for attempt in self.case_attempt_list:
+            if attempt.failure is not None:
+                generation_usage = attempt.failure.codex_usage_generation
+                judge_usage = attempt.failure.codex_usage_judge
+                case_id = attempt.failure.id
+                suite = attempt.failure.suite
+            else:
+                if attempt.result is None:
+                    raise SkillBehaviorEvalError("Case attempt result is absent")
+                generation_usage = attempt.result.codex_usage_generation
+                judge_usage = attempt.result.codex_usage_judge
+                case_id = attempt.result.id
+                suite = attempt.result.suite
+            failure = SkillBehaviorCaseFailure(
+                codex_usage_generation=generation_usage,
+                codex_usage_judge=judge_usage,
+                error_code="project-binding-drift",
+                error_message=_CASE_FAILURE_MESSAGE_BY_CODE_MAP["project-binding-drift"],
+                id=case_id,
+                suite=suite,
+            )
+            case_attempt_list.append(SkillBehaviorCaseAttempt(failure=failure, result=None))
+        return SkillBehaviorEvaluationAttempt(case_attempt_list=tuple(case_attempt_list))
+
+    def provider_binding_drift_get(self) -> SkillBehaviorEvaluationAttempt:
+        """Convert every terminal case to one typed provider-drift non-acceptance.
+
+        Returns:
+            A closed non-acceptance attempt with all completed usage preserved.
+        """
+
+        case_attempt_list: list[SkillBehaviorCaseAttempt] = []
+        for attempt in self.case_attempt_list:
+            if attempt.failure is not None:
+                generation_usage = attempt.failure.codex_usage_generation
+                judge_usage = attempt.failure.codex_usage_judge
+                case_id = attempt.failure.id
+                suite = attempt.failure.suite
+            else:
+                if attempt.result is None:
+                    raise SkillBehaviorEvalError("Case attempt result is absent")
+                generation_usage = attempt.result.codex_usage_generation
+                judge_usage = attempt.result.codex_usage_judge
+                case_id = attempt.result.id
+                suite = attempt.result.suite
+            failure = SkillBehaviorCaseFailure(
+                codex_usage_generation=generation_usage,
+                codex_usage_judge=judge_usage,
+                error_code="provider-binding-drift",
+                error_message=_CASE_FAILURE_MESSAGE_BY_CODE_MAP["provider-binding-drift"],
+                id=case_id,
+                suite=suite,
+            )
+            case_attempt_list.append(SkillBehaviorCaseAttempt(failure=failure, result=None))
+        return SkillBehaviorEvaluationAttempt(case_attempt_list=tuple(case_attempt_list))
+
+
 ModelCall = Callable[[str, Path, dict[str, Any], ModelInvocationConfig], ModelInvocationResult]
+
+
+def _json_object_duplicate_rejecting_get(pair_list: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Build one JSON object while rejecting every duplicate key.
+
+    Args:
+        pair_list: Decoder-provided ordered object members.
+
+    Returns:
+        Duplicate-free JSON object.
+    """
+
+    payload: dict[str, Any] = {}
+    for key, value in pair_list:
+        if key in payload:
+            raise SkillBehaviorEvalError(f"JSON object repeats key: {key}")
+        payload[key] = value
+    return payload
+
+
+def _json_duplicate_rejecting_load(text: str, *, context: str) -> Any:
+    """Parse one JSON document through the shared duplicate-rejecting boundary.
+
+    Args:
+        text: Complete JSON document text.
+        context: Sanitized document owner context.
+
+    Returns:
+        Parsed duplicate-free JSON value.
+    """
+
+    try:
+        return json.loads(text, object_pairs_hook=_json_object_duplicate_rejecting_get)
+    except (json.JSONDecodeError, SkillBehaviorEvalError) as error:
+        raise SkillBehaviorEvalError(f"{context} is invalid") from error
+
+
+def _is_yaml_12_plain_scalar_string(node: ScalarNode) -> bool:
+    """Return whether one scalar node has YAML 1.2 string semantics.
+
+    Args:
+        node: YAML scalar node.
+
+    Returns:
+        True when the scalar is quoted or has no YAML 1.2 core non-string form.
+    """
+
+    return node.style is not None or _YAML_12_NON_STRING_PLAIN_SCALAR_PATTERN.fullmatch(node.value) is None
 
 
 def _positive_int_get(value: str) -> int:
@@ -535,7 +1036,7 @@ def _registered_worktree_root_validate(
     if absolute_worktree_path != resolved_worktree_root:
         raise SkillBehaviorEvalError(f"{context}: registered worktree path traverses a symbolic link: {worktree_path}")
     if (
-        _git_repository_root_get(
+        _physical_git_worktree_root_get(
             resolved_worktree_root,
             context=f"{context}: cannot re-prove registered worktree root",
         )
@@ -596,13 +1097,156 @@ def _git_worktree_record_list_get(repository_root: Path, *, context: str) -> lis
     return record_list
 
 
+def _physical_git_worktree_root_get(path: Path, *, context: str) -> Path:
+    """Return the proven physical registered Git worktree containing one path.
+
+    Args:
+        path: Existing path inside the required worktree.
+        context: Diagnostic owner text.
+
+    Returns:
+        Exact physical registered worktree root.
+    """
+
+    repository_root = _git_repository_root_get(path, context=context)
+    if (
+        repository_root.is_symlink()
+        or not repository_root.is_dir()
+        or Path(os.path.abspath(repository_root)) != repository_root.resolve()
+    ):
+        raise SkillBehaviorEvalError(f"{context}: repository root is not one physical directory")
+    if (
+        _git_output_get(
+            repository_root,
+            ["rev-parse", "--is-inside-work-tree"],
+            context=f"{context}: cannot prove Git worktree state",
+        ).strip()
+        != "true"
+    ):
+        raise SkillBehaviorEvalError(f"{context}: repository root is not one Git worktree")
+    git_directory = Path(
+        _git_output_get(
+            repository_root,
+            ["rev-parse", "--absolute-git-dir"],
+            context=f"{context}: cannot identify Git administration directory",
+        ).strip()
+    )
+    common_directory = _git_common_directory_get(
+        repository_root,
+        context=f"{context}: cannot identify Git owner",
+    )
+    for directory, label in ((git_directory, "administration"), (common_directory, "common administration")):
+        try:
+            resolved_directory = directory.resolve(strict=True)
+        except OSError as error:
+            raise SkillBehaviorEvalError(f"{context}: Git {label} directory is unavailable") from error
+        if (
+            directory.is_symlink()
+            or not resolved_directory.is_dir()
+            or Path(os.path.abspath(directory)) != resolved_directory
+        ):
+            raise SkillBehaviorEvalError(f"{context}: Git {label} directory is not physical")
+    matching_worktree_record_list = [
+        record
+        for record in _git_worktree_record_list_get(
+            repository_root,
+            context=f"{context}: cannot inspect Git worktree registration",
+        )
+        if Path(os.path.abspath(record["worktree"])) == repository_root
+    ]
+    if len(matching_worktree_record_list) != 1:
+        raise SkillBehaviorEvalError(f"{context}: repository root does not match exactly one registered worktree")
+    worktree_git_path = repository_root / ".git"
+    if worktree_git_path.is_file() and not worktree_git_path.is_symlink():
+        try:
+            git_directory_text = worktree_git_path.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError) as error:
+            raise SkillBehaviorEvalError(f"{context}: Git administration reference is unavailable") from error
+        prefix = "gitdir: "
+        if not git_directory_text.startswith(prefix):
+            raise SkillBehaviorEvalError(f"{context}: Git administration reference is invalid")
+        referenced_git_directory = Path(git_directory_text.removeprefix(prefix))
+        if not referenced_git_directory.is_absolute():
+            referenced_git_directory = repository_root / referenced_git_directory
+        if referenced_git_directory.resolve() != git_directory:
+            raise SkillBehaviorEvalError(f"{context}: Git administration reference is inconsistent")
+    elif worktree_git_path.resolve() != git_directory or git_directory != common_directory:
+        raise SkillBehaviorEvalError(f"{context}: Git administration reference is inconsistent")
+    if git_directory != common_directory:
+        administration_back_reference_path = git_directory / "gitdir"
+        try:
+            administration_back_reference_text = administration_back_reference_path.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError) as error:
+            raise SkillBehaviorEvalError(f"{context}: Git administration back-reference is unavailable") from error
+        administration_back_reference = Path(administration_back_reference_text)
+        if not administration_back_reference.is_absolute():
+            administration_back_reference = git_directory / administration_back_reference
+        if (
+            administration_back_reference_path.is_symlink()
+            or administration_back_reference_path.stat().st_nlink != 1
+            or administration_back_reference.resolve() != worktree_git_path
+        ):
+            raise SkillBehaviorEvalError(f"{context}: Git administration back-reference is inconsistent")
+    return repository_root
+
+
+def _project_evaluation_binding_get(
+    working_directory: Path,
+    *,
+    working_directory_mode: str,
+) -> ProjectEvaluationBinding:
+    """Create one exact evaluated-project binding from a proven directory.
+
+    Args:
+        working_directory: Canonical physical directory used by Codex.
+        working_directory_mode: Declared revision policy.
+
+    Returns:
+        Exact worktree, Git owner, branch, and mode binding.
+    """
+
+    worktree_root = _physical_git_worktree_root_get(
+        working_directory,
+        context="evaluated project binding",
+    )
+    git_common_directory = _git_common_directory_get(
+        worktree_root,
+        context="evaluated project binding",
+    )
+    try:
+        git_common_directory_status = git_common_directory.stat()
+        working_directory_status = working_directory.stat()
+        worktree_root_status = worktree_root.stat()
+    except OSError as error:
+        raise SkillBehaviorEvalError("evaluated project binding is unavailable") from error
+    binding = ProjectEvaluationBinding(
+        branch_ref=_git_output_get(
+            worktree_root,
+            ["symbolic-ref", "--quiet", "HEAD"],
+            context="evaluated project binding",
+        ).strip(),
+        git_common_directory=git_common_directory,
+        git_common_directory_device_number=git_common_directory_status.st_dev,
+        git_common_directory_inode_number=git_common_directory_status.st_ino,
+        working_directory=working_directory,
+        working_directory_device_number=working_directory_status.st_dev,
+        working_directory_inode_number=working_directory_status.st_ino,
+        working_directory_mode=working_directory_mode,
+        worktree_root=worktree_root,
+        worktree_root_device_number=worktree_root_status.st_dev,
+        worktree_root_inode_number=worktree_root_status.st_ino,
+    )
+    binding.validate()
+    return binding
+
+
 def _working_directory_resolve(
     resolved_corpus_path: Path,
     working_directory_value: str,
     *,
     context: str,
     mode: str,
-) -> Path:
+) -> ProjectEvaluationBinding:
     """Resolve one corpus directory under its declared Git revision policy.
 
     Args:
@@ -612,7 +1256,7 @@ def _working_directory_resolve(
         mode: Mode.
 
     Returns:
-        One corpus directory under its declared Git revision policy.
+        One exact evaluated-project binding under its declared Git revision policy.
     """
 
     if mode not in WORKING_DIRECTORY_MODE_SET:
@@ -622,15 +1266,14 @@ def _working_directory_resolve(
 
     raw_direct_candidate = resolved_corpus_path.parent / working_directory_value
     direct_candidate = raw_direct_candidate.resolve()
+    source_repository_root = _physical_git_worktree_root_get(
+        resolved_corpus_path.parent,
+        context=f"{context}: cannot identify the corpus worktree",
+    )
     try:
-        source_repository_root = _git_repository_root_get(
-            resolved_corpus_path.parent,
-            context=f"{context}: cannot identify the corpus repository",
-        )
-    except SkillBehaviorEvalError:
-        if direct_candidate.is_dir():
-            return direct_candidate
-        raise
+        resolved_corpus_path.relative_to(source_repository_root)
+    except ValueError as exc:
+        raise SkillBehaviorEvalError(f"{context}: corpus path escapes its physical Git worktree") from exc
     source_branch_ref = _git_output_get(
         source_repository_root,
         ["symbolic-ref", "--quiet", "HEAD"],
@@ -639,10 +1282,14 @@ def _working_directory_resolve(
     if not source_branch_ref.startswith("refs/heads/"):
         raise SkillBehaviorEvalError(f"{context}: corpus worktree has no local branch identity")
     if direct_candidate.is_dir() and mode == "same-branch":
-        direct_repository_root = _git_repository_root_get(
+        direct_repository_root = _physical_git_worktree_root_get(
             direct_candidate,
-            context=f"{context}: direct target is not inside a Git worktree",
+            context=f"{context}: direct target is not inside a physical Git worktree",
         )
+        try:
+            direct_candidate.relative_to(direct_repository_root)
+        except ValueError as exc:
+            raise SkillBehaviorEvalError(f"{context}: direct target escapes its physical Git worktree") from exc
         direct_branch_ref = _git_output_get(
             direct_repository_root,
             ["symbolic-ref", "--quiet", "HEAD"],
@@ -657,7 +1304,10 @@ def _working_directory_resolve(
             raise SkillBehaviorEvalError(
                 f"{context}: direct target path traverses a symbolic link: " f"{raw_direct_candidate}"
             )
-        return direct_candidate
+        return _project_evaluation_binding_get(
+            direct_candidate,
+            working_directory_mode=mode,
+        )
 
     source_worktree_record_list = _git_worktree_record_list_get(
         source_repository_root,
@@ -687,9 +1337,9 @@ def _working_directory_resolve(
         raise SkillBehaviorEvalError(
             f"{context}: not a directory in either the current or primary layout: {direct_candidate}"
         )
-    target_primary_root = _git_repository_root_get(
+    target_primary_root = _physical_git_worktree_root_get(
         primary_candidate,
-        context=f"{context}: target directory is not inside a Git repository",
+        context=f"{context}: target directory is not inside a physical Git worktree",
     )
     try:
         target_relative_path = primary_candidate.relative_to(target_primary_root)
@@ -730,7 +1380,10 @@ def _working_directory_resolve(
         ).strip()
         if local_commit != upstream_commit:
             raise SkillBehaviorEvalError(f"{context}: target main does not equal origin/main")
-        return primary_candidate
+        return _project_evaluation_binding_get(
+            primary_candidate,
+            working_directory_mode=mode,
+        )
     matching_worktree_root_list = []
     for record in _git_worktree_record_list_get(
         target_primary_root,
@@ -767,7 +1420,10 @@ def _working_directory_resolve(
         != matching_worktree_root_list[0]
     ):
         raise SkillBehaviorEvalError(f"{context}: same-branch target path is not a directory: {same_branch_candidate}")
-    return same_branch_candidate
+    return _project_evaluation_binding_get(
+        same_branch_candidate,
+        working_directory_mode=mode,
+    )
 
 
 def _corpus_case_list_load(
@@ -785,10 +1441,30 @@ def _corpus_case_list_load(
         All case contracts with runtime roots resolved only for selected cases.
     """
 
-    resolved_corpus_path = corpus_path.expanduser().resolve()
+    raw_corpus_path = corpus_path.expanduser()
+    resolved_corpus_path = raw_corpus_path.resolve()
+    if (
+        Path(os.path.abspath(raw_corpus_path)) != resolved_corpus_path
+        or raw_corpus_path.is_symlink()
+        or not resolved_corpus_path.is_file()
+    ):
+        raise SkillBehaviorEvalError(f"behavior corpus must be one physical path: {raw_corpus_path}")
+    corpus_worktree_root = _physical_git_worktree_root_get(
+        resolved_corpus_path.parent,
+        context=f"behavior corpus {resolved_corpus_path}: cannot identify the corpus worktree",
+    )
     try:
-        payload = json.loads(resolved_corpus_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        resolved_corpus_path.relative_to(corpus_worktree_root)
+    except ValueError as error:
+        raise SkillBehaviorEvalError(
+            f"behavior corpus {resolved_corpus_path}: path escapes its physical Git worktree"
+        ) from error
+    try:
+        payload = _json_duplicate_rejecting_load(
+            resolved_corpus_path.read_text(encoding="utf-8"),
+            context=f"behavior corpus {resolved_corpus_path}",
+        )
+    except (OSError, UnicodeDecodeError, SkillBehaviorEvalError) as exc:
         raise SkillBehaviorEvalError(f"{resolved_corpus_path}: cannot load corpus: {exc}") from exc
     if not isinstance(payload, dict):
         raise SkillBehaviorEvalError(f"{resolved_corpus_path}: corpus root must be an object")
@@ -868,7 +1544,7 @@ def _corpus_case_list_load(
         semantic_invariant_list = _semantic_invariant_tuple_get(raw_case, context=case_context)
         if not selected:
             continue
-        working_directory = _working_directory_resolve(
+        project_evaluation_binding = _working_directory_resolve(
             resolved_corpus_path,
             working_directory_value,
             context=f"{case_context}.working_directory",
@@ -881,9 +1557,10 @@ def _corpus_case_list_load(
                 forbidden_skill_list=forbidden_skill_list,
                 id=case_id,
                 prompt=prompt,
+                project_evaluation_binding=project_evaluation_binding,
                 semantic_invariant_list=semantic_invariant_list,
                 suite=suite,
-                working_directory=working_directory,
+                working_directory=project_evaluation_binding.working_directory,
             )
         )
     if len(corpus_case_id_list) != len(set(corpus_case_id_list)):
@@ -1014,8 +1691,8 @@ def _codex_usage_get(event_jsonl: str) -> CodexUsage:
     completed_usage_list: list[CodexUsage] = []
     for index, event_text in enumerate(event_jsonl.splitlines()):
         try:
-            event = json.loads(event_text)
-        except json.JSONDecodeError as exc:
+            event = _json_duplicate_rejecting_load(event_text, context=f"Codex JSONL event[{index}]")
+        except SkillBehaviorEvalError as exc:
             raise SkillBehaviorEvalError(f"Codex JSONL event[{index}] is invalid JSON") from exc
         if not isinstance(event, dict) or not isinstance(event.get("type"), str):
             raise SkillBehaviorEvalError(f"Codex JSONL event[{index}] has another shape")
@@ -1080,26 +1757,88 @@ def _codex_payload_get(
                 check=False,
                 capture_output=True,
                 env=environment_by_name_map,
-                input=prompt,
-                text=True,
+                input=prompt.encode("utf-8"),
             )
-        except OSError as exc:
-            raise SkillBehaviorEvalError(f"Codex invocation failed: {exc}") from exc
+        except OSError as error:
+            raise ModelInvocationError(
+                ModelInvocationFailure(
+                    error_code="codex-invocation-start-failed",
+                    error_message=_CASE_FAILURE_MESSAGE_BY_CODE_MAP["codex-invocation-start-failed"],
+                    usage=None,
+                )
+            ) from error
+        usage: CodexUsage | None = None
+        usage_error: SkillBehaviorEvalError | None = None
+        stdout_text: str | None = None
+        if isinstance(completed_process.stdout, bytes):
+            try:
+                stdout_text = completed_process.stdout.decode("utf-8")
+            except UnicodeDecodeError as error:
+                usage_error = SkillBehaviorEvalError("Codex structured stdout is not valid UTF-8")
+                usage_error.__cause__ = error
+        else:
+            usage_error = SkillBehaviorEvalError("Codex structured stdout is not bytes")
+        if stdout_text is not None:
+            try:
+                usage = _codex_usage_get(stdout_text)
+            except SkillBehaviorEvalError as error:
+                usage_error = error
+        stderr_invalid = not isinstance(completed_process.stderr, bytes)
+        if not stderr_invalid:
+            try:
+                completed_process.stderr.decode("utf-8")
+            except UnicodeDecodeError:
+                stderr_invalid = True
+        if stderr_invalid:
+            raise ModelInvocationError(
+                ModelInvocationFailure(
+                    error_code="codex-output-invalid",
+                    error_message=_CASE_FAILURE_MESSAGE_BY_CODE_MAP["codex-output-invalid"],
+                    usage=usage,
+                )
+            )
         if completed_process.returncode != 0:
-            stderr_tail = completed_process.stderr[-4000:].strip()
-            stdout_tail = completed_process.stdout[-4000:].strip()
-            raise SkillBehaviorEvalError(
-                f"Codex exited with {completed_process.returncode}; stdout={stdout_tail!r}; stderr={stderr_tail!r}"
+            raise ModelInvocationError(
+                ModelInvocationFailure(
+                    error_code="codex-process-failed",
+                    error_message=_CASE_FAILURE_MESSAGE_BY_CODE_MAP["codex-process-failed"],
+                    usage=usage,
+                )
             )
+        if usage_error is not None:
+            raise ModelInvocationError(
+                ModelInvocationFailure(
+                    error_code="codex-usage-invalid",
+                    error_message=_CASE_FAILURE_MESSAGE_BY_CODE_MAP["codex-usage-invalid"],
+                    usage=None,
+                )
+            ) from usage_error
         try:
-            payload = json.loads(output_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise SkillBehaviorEvalError(f"Codex returned invalid structured output: {exc}") from exc
+            payload = _json_duplicate_rejecting_load(
+                output_path.read_text(encoding="utf-8"),
+                context="Codex structured output",
+            )
+        except (OSError, UnicodeDecodeError, SkillBehaviorEvalError) as error:
+            raise ModelInvocationError(
+                ModelInvocationFailure(
+                    error_code="codex-output-invalid",
+                    error_message=_CASE_FAILURE_MESSAGE_BY_CODE_MAP["codex-output-invalid"],
+                    usage=usage,
+                )
+            ) from error
     if not isinstance(payload, dict):
-        raise SkillBehaviorEvalError("Codex structured output must be an object")
+        raise ModelInvocationError(
+            ModelInvocationFailure(
+                error_code="codex-output-invalid",
+                error_message=_CASE_FAILURE_MESSAGE_BY_CODE_MAP["codex-output-invalid"],
+                usage=usage,
+            )
+        )
+    if usage is None:
+        raise SkillBehaviorEvalError("Successful Codex invocation usage is absent")
     return ModelInvocationResult(
         payload=payload,
-        usage=_codex_usage_get(completed_process.stdout),
+        usage=usage,
     )
 
 
@@ -1149,7 +1888,7 @@ def _preinstalled_plugin_source_binding_validate(
     marketplace_path_list: Sequence[Path],
     plugin_selector_list: Sequence[str],
     standard_codex_home: Path,
-) -> None:
+) -> dict[str, PluginSourceBinding]:
     """Require server-prepared plugins to equal the declared local sources.
 
     Args:
@@ -1157,6 +1896,9 @@ def _preinstalled_plugin_source_binding_validate(
         marketplace_path_list: Ordered marketplace path values.
         plugin_selector_list: Ordered plugin selector values.
         standard_codex_home: Current OS user's standard Codex home.
+
+    Returns:
+        Exact validated source/cache binding by provider.
     """
 
     if bool(marketplace_path_list) != bool(plugin_selector_list):
@@ -1167,7 +1909,8 @@ def _preinstalled_plugin_source_binding_validate(
         raise SkillBehaviorEvalError("every model run requires explicit --plugin-marketplace and --plugin binding")
 
     normalized_plugin_selector_list = _plugin_selector_tuple_normalize(plugin_selector_list)
-    _required_plugin_source_binding_validate(case_list, normalized_plugin_selector_list)
+    plugin_selector_by_name_map = _plugin_selector_by_name_map_get(normalized_plugin_selector_list)
+    _required_plugin_source_binding_validate(case_list, plugin_selector_by_name_map)
 
     raw_cache_root = standard_codex_home / "plugins/cache"
     try:
@@ -1181,22 +1924,69 @@ def _preinstalled_plugin_source_binding_validate(
     ):
         raise SkillBehaviorEvalError("the standard Codex plugin cache root must be one physical directory")
 
+    marketplace_worktree_root_by_name_map: dict[str, Path] = {}
+    marketplace_manifest_path_by_name_map: dict[str, Path] = {}
     resolved_marketplace_path_list: list[Path] = []
+    plugin_source_declaration_by_name_by_marketplace_name_map: dict[str, dict[str, dict[str, Any]]] = {}
     plugin_source_path_by_name_by_marketplace_name_map: dict[str, dict[str, Path]] = {}
     for marketplace_path in marketplace_path_list:
-        resolved_marketplace_path = marketplace_path.expanduser().resolve()
+        raw_marketplace_path = marketplace_path.expanduser()
+        try:
+            resolved_marketplace_path = raw_marketplace_path.resolve(strict=True)
+        except OSError as error:
+            raise SkillBehaviorEvalError(f"plugin marketplace is unavailable: {raw_marketplace_path}") from error
+        absolute_marketplace_path = Path(os.path.abspath(raw_marketplace_path))
+        if (
+            raw_marketplace_path != absolute_marketplace_path
+            or absolute_marketplace_path != resolved_marketplace_path
+            or raw_marketplace_path.is_symlink()
+            or not resolved_marketplace_path.is_dir()
+        ):
+            raise SkillBehaviorEvalError(
+                f"plugin marketplace must be one physical canonical path: {raw_marketplace_path}"
+            )
+        marketplace_worktree_root = _physical_git_worktree_root_get(
+            resolved_marketplace_path,
+            context=f"plugin marketplace {resolved_marketplace_path}",
+        )
+        if marketplace_worktree_root != resolved_marketplace_path:
+            raise SkillBehaviorEvalError(
+                f"plugin marketplace path must be exactly one registered Git worktree: {resolved_marketplace_path}"
+            )
         marketplace_manifest_path = resolved_marketplace_path / ".agents/plugins/marketplace.json"
-        if not marketplace_manifest_path.is_file():
+        try:
+            resolved_marketplace_manifest_path = marketplace_manifest_path.resolve(strict=True)
+            marketplace_manifest_link_count = marketplace_manifest_path.stat().st_nlink
+        except OSError as error:
             raise SkillBehaviorEvalError(
                 f"plugin marketplace has no .agents/plugins/marketplace.json: {resolved_marketplace_path}"
+            ) from error
+        if (
+            marketplace_manifest_path.is_symlink()
+            or not resolved_marketplace_manifest_path.is_file()
+            or marketplace_manifest_link_count != 1
+            or Path(os.path.abspath(marketplace_manifest_path)) != resolved_marketplace_manifest_path
+        ):
+            raise SkillBehaviorEvalError(
+                f"plugin marketplace manifest must be one canonical physical nonsymbolic file: "
+                f"{marketplace_manifest_path}"
             )
+        try:
+            resolved_marketplace_manifest_path.relative_to(marketplace_worktree_root)
+        except ValueError as error:
+            raise SkillBehaviorEvalError(
+                f"plugin marketplace manifest escapes its proven worktree: {marketplace_manifest_path}"
+            ) from error
         if resolved_marketplace_path in resolved_marketplace_path_list:
             raise SkillBehaviorEvalError(f"duplicate plugin marketplace: {resolved_marketplace_path}")
         resolved_marketplace_path_list.append(resolved_marketplace_path)
 
         try:
-            marketplace_payload = json.loads(marketplace_manifest_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            marketplace_payload = _json_duplicate_rejecting_load(
+                marketplace_manifest_path.read_text(encoding="utf-8"),
+                context=f"plugin marketplace manifest {marketplace_manifest_path}",
+            )
+        except (OSError, UnicodeDecodeError, SkillBehaviorEvalError) as exc:
             raise SkillBehaviorEvalError(
                 f"plugin marketplace manifest is unavailable or invalid: {marketplace_manifest_path}: {exc}"
             ) from exc
@@ -1220,6 +2010,9 @@ def _preinstalled_plugin_source_binding_validate(
         _plugin_identity_validate(normalized_marketplace_name, label="plugin marketplace name")
         if normalized_marketplace_name in plugin_source_path_by_name_by_marketplace_name_map:
             raise SkillBehaviorEvalError(f"duplicate plugin marketplace name: {normalized_marketplace_name}")
+        marketplace_manifest_path_by_name_map[normalized_marketplace_name] = marketplace_manifest_path
+        marketplace_worktree_root_by_name_map[normalized_marketplace_name] = marketplace_worktree_root
+        plugin_source_declaration_by_name_map: dict[str, dict[str, Any]] = {}
         plugin_source_path_by_name_map: dict[str, Path] = {}
         for plugin in plugin_list:
             plugin_name = plugin["name"]
@@ -1252,9 +2045,14 @@ def _preinstalled_plugin_source_binding_validate(
                     f"plugin source must be one physical directory in its provided marketplace: "
                     f"{plugin_name}@{normalized_marketplace_name}"
                 )
+            plugin_source_declaration_by_name_map[plugin_name] = plugin
             plugin_source_path_by_name_map[plugin_name] = plugin_source_path
+        plugin_source_declaration_by_name_by_marketplace_name_map[normalized_marketplace_name] = (
+            plugin_source_declaration_by_name_map
+        )
         plugin_source_path_by_name_by_marketplace_name_map[normalized_marketplace_name] = plugin_source_path_by_name_map
 
+    plugin_source_binding_by_name_map: dict[str, PluginSourceBinding] = {}
     for plugin_selector in normalized_plugin_selector_list:
         plugin_name, marketplace_name = plugin_selector.split("@", 1)
         if marketplace_name not in plugin_source_path_by_name_by_marketplace_name_map:
@@ -1262,10 +2060,16 @@ def _preinstalled_plugin_source_binding_validate(
         if plugin_name not in plugin_source_path_by_name_by_marketplace_name_map[marketplace_name]:
             raise SkillBehaviorEvalError(f"plugin selector is absent from its provided marketplace: {plugin_selector}")
         plugin_source_path = plugin_source_path_by_name_by_marketplace_name_map[marketplace_name][plugin_name]
+        plugin_source_declaration = plugin_source_declaration_by_name_by_marketplace_name_map[marketplace_name][
+            plugin_name
+        ]
         plugin_manifest_path = plugin_source_path / ".codex-plugin/plugin.json"
         try:
-            plugin_manifest = json.loads(plugin_manifest_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            plugin_manifest = _json_duplicate_rejecting_load(
+                plugin_manifest_path.read_text(encoding="utf-8"),
+                context=f"plugin manifest {plugin_manifest_path}",
+            )
+        except (OSError, UnicodeDecodeError, SkillBehaviorEvalError) as exc:
             raise SkillBehaviorEvalError(f"plugin manifest is unavailable or invalid: {plugin_manifest_path}") from exc
         if not isinstance(plugin_manifest, dict) or plugin_manifest.get("name") != plugin_name:
             raise SkillBehaviorEvalError(f"plugin manifest identity differs from its selector: {plugin_selector}")
@@ -1287,10 +2091,66 @@ def _preinstalled_plugin_source_binding_validate(
                 f"server-prepared plugin cache must be one physical directory below the standard cache root: "
                 f"{plugin_selector}"
             )
-        if _plugin_file_sha256_by_relative_path_map_get(
-            plugin_source_path
-        ) != _plugin_file_sha256_by_relative_path_map_get(cached_plugin_path):
+        file_sha256_by_relative_path_map = _plugin_file_sha256_by_relative_path_map_get(plugin_source_path)
+        if file_sha256_by_relative_path_map != _plugin_file_sha256_by_relative_path_map_get(cached_plugin_path):
             raise SkillBehaviorEvalError(f"server-prepared plugin differs from its declared source: {plugin_selector}")
+        plugin_source_binding = PluginSourceBinding(
+            cache_path=cached_plugin_path,
+            file_sha256_by_relative_path_map=file_sha256_by_relative_path_map,
+            marketplace_manifest_path=marketplace_manifest_path_by_name_map[marketplace_name],
+            marketplace_name=marketplace_name,
+            marketplace_worktree_root=marketplace_worktree_root_by_name_map[marketplace_name],
+            plugin_source_declaration_json=json.dumps(
+                plugin_source_declaration,
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+            source_path=plugin_source_path,
+        )
+        plugin_source_binding.validate(plugin_name=plugin_name)
+        plugin_source_binding_by_name_map[plugin_name] = plugin_source_binding
+    return plugin_source_binding_by_name_map
+
+
+def _plugin_source_binding_by_name_map_validate(
+    plugin_source_binding_by_name_map: dict[str, PluginSourceBinding],
+) -> None:
+    """Revalidate every exact provider source/cache binding.
+
+    Args:
+        plugin_source_binding_by_name_map: Exact source/cache binding by provider.
+    """
+
+    for plugin_name, plugin_source_binding in plugin_source_binding_by_name_map.items():
+        if not isinstance(plugin_source_binding, PluginSourceBinding):
+            raise SkillBehaviorEvalError(f"provider source binding has another shape: {plugin_name}")
+        plugin_source_binding.validate(plugin_name=plugin_name)
+
+
+def _project_evaluation_binding_validate(case: SkillBehaviorCase) -> None:
+    """Reprove one case's exact evaluated-project identity.
+
+    Args:
+        case: Selected behavior-evaluation case.
+    """
+
+    if (
+        not isinstance(case.project_evaluation_binding, ProjectEvaluationBinding)
+        or case.working_directory != case.project_evaluation_binding.working_directory
+    ):
+        raise SkillBehaviorEvalError("evaluated project binding has another shape")
+    case.project_evaluation_binding.validate()
+
+
+def _project_evaluation_binding_list_validate(case_list: Sequence[SkillBehaviorCase]) -> None:
+    """Reprove every selected case's exact evaluated-project identity.
+
+    Args:
+        case_list: Ordered selected behavior-evaluation cases.
+    """
+
+    for case in case_list:
+        _project_evaluation_binding_validate(case)
 
 
 def _plugin_selector_tuple_normalize(
@@ -1317,31 +2177,61 @@ def _plugin_selector_tuple_normalize(
     return normalized_plugin_selector_list
 
 
+def _plugin_selector_by_name_map_get(plugin_selector_list: Sequence[str]) -> dict[str, str]:
+    """Bind each plugin provider to exactly one declared source selector."""
+
+    plugin_selector_by_name_map: dict[str, str] = {}
+    for plugin_selector in _plugin_selector_tuple_normalize(plugin_selector_list):
+        plugin_name = plugin_selector.split("@", 1)[0]
+        if plugin_name in plugin_selector_by_name_map:
+            raise SkillBehaviorEvalError(f"plugin provider has ambiguous source bindings: {plugin_name}")
+        plugin_selector_by_name_map[plugin_name] = plugin_selector
+    return plugin_selector_by_name_map
+
+
 def _required_plugin_source_binding_validate(
     case_list: Sequence[SkillBehaviorCase],
-    plugin_selector_list: Sequence[str],
+    plugin_name_collection: Collection[str],
+    *,
+    activated_skill_list: Sequence[str] = (),
 ) -> None:
-    """Require every expected or forbidden provider in the declared source set.
+    """Require every expected, forbidden or activated provider in the exact source set.
 
     Args:
         case_list: Ordered case values.
-        plugin_selector_list: Ordered plugin selector values.
+        plugin_name_collection: Providers with exact declared sources.
+        activated_skill_list: Ordered normalized activated skill values.
     """
 
-    installed_plugin_name_set = {
-        selector.split("@", 1)[0] for selector in _plugin_selector_tuple_normalize(plugin_selector_list)
-    }
     required_plugin_name_set = {
         skill_name.split(":", 1)[0]
         for case in case_list
         for skill_name in (*case.expected_skill_list, *case.forbidden_skill_list)
         if ":" in skill_name
     }
-    missing_plugin_name_list = sorted(required_plugin_name_set - installed_plugin_name_set)
+    required_plugin_name_set.update(_activated_plugin_name_set_get(activated_skill_list))
+    missing_plugin_name_list = sorted(required_plugin_name_set - set(plugin_name_collection))
     if missing_plugin_name_list:
         raise SkillBehaviorEvalError(
-            "source binding omits plugins required by selected cases: " + ", ".join(missing_plugin_name_list)
+            "source binding omits plugins required by selected cases or actual activation: "
+            + ", ".join(missing_plugin_name_list)
         )
+
+
+def _activated_plugin_name_set_get(activated_skill_list: Sequence[str]) -> set[str]:
+    """Derive each exact provider identity from normalized activated skills."""
+
+    activated_plugin_name_set: set[str] = set()
+    for activated_skill_name in activated_skill_list:
+        if ":" not in activated_skill_name:
+            continue
+        if activated_skill_name.count(":") != 1:
+            raise SkillBehaviorEvalError(f"activated skill has ambiguous provider identity: {activated_skill_name}")
+        plugin_name, skill_name = activated_skill_name.split(":", 1)
+        _plugin_identity_validate(plugin_name, label="activated skill plugin name")
+        _plugin_identity_validate(skill_name, label="activated skill name")
+        activated_plugin_name_set.add(plugin_name)
+    return activated_plugin_name_set
 
 
 def _plugin_identity_validate(value: str, *, label: str) -> None:
@@ -1447,6 +2337,7 @@ def _case_evaluate(
     case: SkillBehaviorCase,
     *,
     invocation_config: ModelInvocationConfig,
+    plugin_source_binding_by_name_map: dict[str, PluginSourceBinding],
     model_call: ModelCall = _codex_payload_get,
 ) -> SkillBehaviorCaseResult:
     """Run generation and independent semantic judging for one case.
@@ -1454,87 +2345,358 @@ def _case_evaluate(
     Args:
         case: Case.
         invocation_config: Invocation config.
+        plugin_source_binding_by_name_map: Exact validated source/cache binding by provider.
         model_call: Model call.
 
     Returns:
         Resulting skill behavior case result.
     """
 
-    generation_invocation = model_call(
-        _generation_prompt_get(case),
+    generation_usage: CodexUsage | None = None
+    judge_usage: CodexUsage | None = None
+    evaluation_stage = "generation"
+    try:
+        _project_evaluation_binding_validate(case)
+        _plugin_source_binding_by_name_map_validate(plugin_source_binding_by_name_map)
+        generation_invocation = model_call(
+            _generation_prompt_get(case),
+            case.working_directory,
+            _GENERATION_OUTPUT_SCHEMA,
+            invocation_config,
+        )
+        generation_usage = generation_invocation.usage
+        _project_evaluation_binding_validate(case)
+        _plugin_source_binding_by_name_map_validate(plugin_source_binding_by_name_map)
+        generation_payload = _generation_payload_validate(
+            generation_invocation.payload,
+            case=case,
+        )
+        activated_skill_list = _activated_skill_tuple_resolve(
+            generation_payload["activated_skill_list"],
+            case=case,
+            plugin_source_binding_by_name_map=plugin_source_binding_by_name_map,
+        )
+        _required_plugin_source_binding_validate(
+            [case],
+            plugin_source_binding_by_name_map,
+            activated_skill_list=activated_skill_list,
+        )
+        evaluation_stage = "judge"
+        _project_evaluation_binding_validate(case)
+        _plugin_source_binding_by_name_map_validate(plugin_source_binding_by_name_map)
+        judge_invocation = model_call(
+            _judge_prompt_get(case=case, generation_payload=generation_payload),
+            case.working_directory,
+            _JUDGE_OUTPUT_SCHEMA,
+            invocation_config,
+        )
+        judge_usage = judge_invocation.usage
+        _project_evaluation_binding_validate(case)
+        _plugin_source_binding_by_name_map_validate(plugin_source_binding_by_name_map)
+        judge_result_list = _judge_result_tuple_get(
+            judge_invocation.payload,
+            case=case,
+        )
+        activated_skill_set = set(activated_skill_list)
+        missing_expected_skill_list = tuple(
+            skill_name for skill_name in case.expected_skill_list if skill_name not in activated_skill_set
+        )
+        forbidden_activated_skill_list = tuple(
+            skill_name for skill_name in case.forbidden_skill_list if skill_name in activated_skill_set
+        )
+        passed = (
+            not missing_expected_skill_list
+            and not forbidden_activated_skill_list
+            and all(result.passed for result in judge_result_list)
+        )
+        return SkillBehaviorCaseResult(
+            activated_skill_list=activated_skill_list,
+            codex_usage_generation=generation_usage,
+            codex_usage_judge=judge_usage,
+            forbidden_activated_skill_list=forbidden_activated_skill_list,
+            id=case.id,
+            missing_expected_skill_list=missing_expected_skill_list,
+            passed=passed,
+            response=generation_payload["response"],
+            semantic_invariant_result_list=judge_result_list,
+            suite=case.suite,
+        )
+    except SkillBehaviorCaseEvaluationError:
+        raise
+    except ModelInvocationError as error:
+        if evaluation_stage == "generation":
+            generation_usage = error.failure.usage
+        else:
+            judge_usage = error.failure.usage
+        raise SkillBehaviorCaseEvaluationError(
+            SkillBehaviorCaseFailure(
+                codex_usage_generation=generation_usage,
+                codex_usage_judge=judge_usage,
+                error_code=error.failure.error_code,
+                error_message=error.failure.error_message,
+                id=case.id,
+                suite=case.suite,
+            )
+        ) from error
+    except SkillBehaviorEvalError as error:
+        error_code = f"{evaluation_stage}-validation-failed"
+        raise SkillBehaviorCaseEvaluationError(
+            SkillBehaviorCaseFailure(
+                codex_usage_generation=generation_usage,
+                codex_usage_judge=judge_usage,
+                error_code=error_code,
+                error_message=_CASE_FAILURE_MESSAGE_BY_CODE_MAP[error_code],
+                id=case.id,
+                suite=case.suite,
+            )
+        ) from error
+    except Exception as error:
+        raise SkillBehaviorCaseEvaluationError(
+            SkillBehaviorCaseFailure(
+                codex_usage_generation=generation_usage,
+                codex_usage_judge=judge_usage,
+                error_code="case-internal-failure",
+                error_message=_CASE_FAILURE_MESSAGE_BY_CODE_MAP["case-internal-failure"],
+                id=case.id,
+                suite=case.suite,
+            )
+        ) from error
+
+
+def _plugin_source_path_validate(plugin_name: str, plugin_source_binding: PluginSourceBinding) -> Path:
+    """Require one physical source root whose manifest owns the provider identity.
+
+    Args:
+        plugin_name: Exact provider identity.
+        plugin_source_binding: Exact source/cache binding.
+
+    Returns:
+        Physical resolved provider source root.
+    """
+
+    _plugin_identity_validate(plugin_name, label="activated skill plugin name")
+    plugin_source_binding.validate(plugin_name=plugin_name)
+    plugin_manifest_path = plugin_source_binding.source_path / ".codex-plugin/plugin.json"
+    try:
+        plugin_manifest = _json_duplicate_rejecting_load(
+            plugin_manifest_path.read_text(encoding="utf-8"),
+            context=f"activated provider source manifest {plugin_manifest_path}",
+        )
+    except (OSError, UnicodeDecodeError, SkillBehaviorEvalError) as exc:
+        raise SkillBehaviorEvalError(f"activated provider source manifest is invalid: {plugin_name}") from exc
+    if not isinstance(plugin_manifest, dict) or plugin_manifest.get("name") != plugin_name:
+        raise SkillBehaviorEvalError(f"activated provider source identity is mismatched: {plugin_name}")
+    return plugin_source_binding.source_path
+
+
+def _skill_frontmatter_get(skill_text: str, *, context: str, skill_path: Path) -> dict[str, str]:
+    """Parse one exact closed SKILL.md frontmatter document.
+
+    Args:
+        skill_text: Complete SKILL.md text.
+        context: Diagnostic owner text.
+        skill_path: Exact SKILL.md path.
+
+    Returns:
+        Exact required string fields.
+    """
+
+    line_list = skill_text.splitlines()
+    if not line_list or line_list[0] != "---":
+        raise SkillBehaviorEvalError(f"{context} SKILL.md frontmatter is invalid: {skill_path}")
+    try:
+        closing_index = line_list.index("---", 1)
+    except ValueError as error:
+        raise SkillBehaviorEvalError(f"{context} SKILL.md frontmatter is invalid: {skill_path}") from error
+    frontmatter_text = "\n".join(line_list[1:closing_index])
+    try:
+        event_list = list(yaml.parse(frontmatter_text))
+        if any(
+            isinstance(event, AliasEvent)
+            or isinstance(event, NodeEvent)
+            and (event.anchor is not None or event.tag is not None)
+            for event in event_list
+        ):
+            raise SkillBehaviorEvalError(f"{context} SKILL.md frontmatter is invalid: {skill_path}")
+        document_node_list = list(yaml.compose_all(frontmatter_text, Loader=yaml.BaseLoader))
+    except yaml.YAMLError as error:
+        raise SkillBehaviorEvalError(f"{context} SKILL.md frontmatter is invalid: {skill_path}") from error
+    if len(document_node_list) != 1 or not isinstance(document_node_list[0], MappingNode):
+        raise SkillBehaviorEvalError(f"{context} SKILL.md frontmatter is invalid: {skill_path}")
+    frontmatter: dict[str, str] = {}
+    for key_node, value_node in document_node_list[0].value:
+        if (
+            not isinstance(key_node, ScalarNode)
+            or key_node.tag != "tag:yaml.org,2002:str"
+            or key_node.value == "<<"
+            or key_node.value in frontmatter
+            or not isinstance(value_node, ScalarNode)
+            or value_node.tag != "tag:yaml.org,2002:str"
+            or not _is_yaml_12_plain_scalar_string(value_node)
+            or not value_node.value.strip()
+        ):
+            raise SkillBehaviorEvalError(f"{context} SKILL.md frontmatter is invalid: {skill_path}")
+        frontmatter[key_node.value] = value_node.value
+    if set(frontmatter) != _SKILL_FRONTMATTER_FIELD_SET:
+        raise SkillBehaviorEvalError(f"{context} SKILL.md frontmatter is invalid: {skill_path}")
+    return frontmatter
+
+
+def _skill_path_resolve(
+    owner_root: Path,
+    relative_skill_path: Path,
+    *,
+    expected_skill_name: str,
+    context: str,
+) -> Path | None:
+    """Resolve one physical canonical SKILL.md and verify its declared identity.
+
+    Args:
+        owner_root: Exact physical provider or project owner root.
+        relative_skill_path: Canonical owner-relative SKILL.md path.
+        expected_skill_name: Exact unqualified skill identity.
+        context: Diagnostic owner text.
+
+    Returns:
+        Physical SKILL.md path, or None when the canonical path is absent.
+    """
+
+    raw_skill_path = owner_root / relative_skill_path
+    if not raw_skill_path.exists():
+        return None
+    try:
+        skill_path = raw_skill_path.resolve(strict=True)
+        skill_path.relative_to(owner_root)
+    except (OSError, ValueError) as exc:
+        raise SkillBehaviorEvalError(f"{context} skill path escapes its exact source: {raw_skill_path}") from exc
+    if Path(os.path.abspath(raw_skill_path)) != skill_path or raw_skill_path.is_symlink() or not skill_path.is_file():
+        raise SkillBehaviorEvalError(f"{context} skill must be one physical SKILL.md: {raw_skill_path}")
+    try:
+        skill_text = skill_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise SkillBehaviorEvalError(f"{context} SKILL.md frontmatter is invalid: {skill_path}") from exc
+    frontmatter = _skill_frontmatter_get(skill_text, context=context, skill_path=skill_path)
+    if frontmatter["name"] != expected_skill_name:
+        raise SkillBehaviorEvalError(f"{context} SKILL.md identity is mismatched: {skill_path}")
+    return skill_path
+
+
+def _qualified_activated_skill_resolve(
+    activated_skill_name: str,
+    *,
+    plugin_source_binding_by_name_map: dict[str, PluginSourceBinding],
+) -> str:
+    """Resolve one qualified activation to its exact bound provider SKILL.md.
+
+    Args:
+        activated_skill_name: Provider-qualified activation identity.
+        plugin_source_binding_by_name_map: Exact validated source/cache bindings.
+
+    Returns:
+        The unchanged exact qualified activation identity.
+    """
+
+    if activated_skill_name.count(":") != 1:
+        raise SkillBehaviorEvalError(f"activated skill has ambiguous provider identity: {activated_skill_name}")
+    plugin_name, skill_name = activated_skill_name.split(":", 1)
+    _plugin_identity_validate(plugin_name, label="activated skill plugin name")
+    _plugin_identity_validate(skill_name, label="activated skill name")
+    if plugin_name not in plugin_source_binding_by_name_map:
+        raise SkillBehaviorEvalError(f"activated skill has no exact bound provider source: {activated_skill_name}")
+    plugin_source_path = _plugin_source_path_validate(
+        plugin_name,
+        plugin_source_binding_by_name_map[plugin_name],
+    )
+    if (
+        _skill_path_resolve(
+            plugin_source_path,
+            Path("skills") / skill_name / "SKILL.md",
+            expected_skill_name=skill_name,
+            context=f"activated provider {plugin_name}",
+        )
+        is None
+    ):
+        raise SkillBehaviorEvalError(
+            f"activated skill is absent from its exact bound provider source: {activated_skill_name}"
+        )
+    return activated_skill_name
+
+
+def _project_local_skill_path_get(case: SkillBehaviorCase, skill_name: str) -> Path | None:
+    """Return one physical project-local SKILL.md for the case working directory.
+
+    Args:
+        case: Case whose project owns the possible local skill.
+        skill_name: Exact unqualified skill identity.
+
+    Returns:
+        Physical project-local SKILL.md path, or None when absent.
+    """
+
+    project_root = _physical_git_worktree_root_get(
         case.working_directory,
-        _GENERATION_OUTPUT_SCHEMA,
-        invocation_config,
+        context=f"{case.suite}:{case.id}: cannot identify project-local skill owner",
     )
-    generation_payload = _generation_payload_validate(
-        generation_invocation.payload,
-        case=case,
-    )
-    judge_invocation = model_call(
-        _judge_prompt_get(case=case, generation_payload=generation_payload),
-        case.working_directory,
-        _JUDGE_OUTPUT_SCHEMA,
-        invocation_config,
-    )
-    judge_result_list = _judge_result_tuple_get(
-        judge_invocation.payload,
-        case=case,
-    )
-    activated_skill_list = _activated_skill_tuple_normalize(
-        generation_payload["activated_skill_list"],
-        case=case,
-    )
-    activated_skill_set = set(activated_skill_list)
-    missing_expected_skill_list = tuple(
-        skill_name for skill_name in case.expected_skill_list if skill_name not in activated_skill_set
-    )
-    forbidden_activated_skill_list = tuple(
-        skill_name for skill_name in case.forbidden_skill_list if skill_name in activated_skill_set
-    )
-    passed = (
-        not missing_expected_skill_list
-        and not forbidden_activated_skill_list
-        and all(result.passed for result in judge_result_list)
-    )
-    return SkillBehaviorCaseResult(
-        activated_skill_list=activated_skill_list,
-        codex_usage_generation=generation_invocation.usage,
-        codex_usage_judge=judge_invocation.usage,
-        forbidden_activated_skill_list=forbidden_activated_skill_list,
-        id=case.id,
-        missing_expected_skill_list=missing_expected_skill_list,
-        passed=passed,
-        response=generation_payload["response"],
-        semantic_invariant_result_list=judge_result_list,
-        suite=case.suite,
+    return _skill_path_resolve(
+        project_root,
+        Path(".agents/skills") / skill_name / "SKILL.md",
+        expected_skill_name=skill_name,
+        context="project-local activated",
     )
 
 
-def _activated_skill_tuple_normalize(
+def _activated_skill_tuple_resolve(
     activated_skill_list: Sequence[str],
     *,
     case: SkillBehaviorCase,
+    plugin_source_binding_by_name_map: dict[str, PluginSourceBinding],
 ) -> tuple[str, ...]:
-    """Canonicalize an unqualified report only when the case makes its provider identity unambiguous.
+    """Resolve every activation to one exact provider or project-local SKILL.md.
 
     Args:
         activated_skill_list: Ordered activated skill values.
         case: Case.
+        plugin_source_binding_by_name_map: Exact validated source/cache bindings.
 
     Returns:
         Values in deterministic immutable order.
     """
 
     canonical_skill_name_set = set(case.expected_skill_list) | set(case.forbidden_skill_list)
-    canonical_skill_name_list_by_suffix_map: dict[str, list[str]] = {}
-    for canonical_skill_name in canonical_skill_name_set:
-        skill_suffix = canonical_skill_name.rsplit(":", maxsplit=1)[-1]
-        canonical_skill_name_list_by_suffix_map.setdefault(skill_suffix, []).append(canonical_skill_name)
 
     normalized_skill_list: list[str] = []
     for activated_skill_name in activated_skill_list:
-        candidate_list = canonical_skill_name_list_by_suffix_map.get(activated_skill_name, [])
-        normalized_skill_name = candidate_list[0] if len(candidate_list) == 1 else activated_skill_name
+        if ":" in activated_skill_name:
+            normalized_skill_name = _qualified_activated_skill_resolve(
+                activated_skill_name,
+                plugin_source_binding_by_name_map=plugin_source_binding_by_name_map,
+            )
+        else:
+            _plugin_identity_validate(activated_skill_name, label="activated skill name")
+            candidate_list = [
+                canonical_skill_name
+                for canonical_skill_name in canonical_skill_name_set
+                if canonical_skill_name.count(":") == 1
+                and canonical_skill_name.rsplit(":", maxsplit=1)[-1] == activated_skill_name
+            ]
+            for candidate in candidate_list:
+                _qualified_activated_skill_resolve(
+                    candidate,
+                    plugin_source_binding_by_name_map=plugin_source_binding_by_name_map,
+                )
+            if _project_local_skill_path_get(case, activated_skill_name) is not None:
+                candidate_list.append(activated_skill_name)
+            if not candidate_list:
+                raise SkillBehaviorEvalError(
+                    f"{case.suite}:{case.id}.generation activated skill is absent from exact case sources: "
+                    f"{activated_skill_name}"
+                )
+            if len(candidate_list) > 1:
+                raise SkillBehaviorEvalError(
+                    f"{case.suite}:{case.id}.generation activated skill has ambiguous source identity: "
+                    f"{activated_skill_name}"
+                )
+            normalized_skill_name = candidate_list[0]
         if normalized_skill_name not in normalized_skill_list:
             normalized_skill_list.append(normalized_skill_name)
     return tuple(normalized_skill_list)
@@ -1648,34 +2810,92 @@ def _case_list_evaluate(
     *,
     concurrency: int,
     invocation_config: ModelInvocationConfig,
-) -> list[SkillBehaviorCaseResult]:
+    plugin_source_binding_by_name_map: dict[str, PluginSourceBinding],
+) -> SkillBehaviorEvaluationAttempt:
     """Evaluate cases concurrently while preserving corpus order in the result.
 
     Args:
         case_list: Ordered case values.
         concurrency: Concurrency.
         invocation_config: Invocation config.
+        plugin_source_binding_by_name_map: Exact validated source/cache binding by provider.
 
     Returns:
-        Requested values in deterministic order.
+        Fully drained terminal case attempts in deterministic corpus order.
     """
 
-    result_by_index_map: dict[int, SkillBehaviorCaseResult] = {}
+    attempt_by_index_map: dict[int, SkillBehaviorCaseAttempt] = {}
     with ThreadPoolExecutor(max_workers=min(concurrency, len(case_list))) as executor:
         future_by_index_map = {}
+        submission_stopped = False
         for index, case in enumerate(case_list):
-            print(f"RUN {case.suite}:{case.id}", flush=True)
-            future = executor.submit(
-                _case_evaluate,
-                case,
-                invocation_config=invocation_config,
-            )
+            if submission_stopped:
+                failure = SkillBehaviorCaseFailure(
+                    codex_usage_generation=None,
+                    codex_usage_judge=None,
+                    error_code="case-not-submitted",
+                    error_message=_CASE_FAILURE_MESSAGE_BY_CODE_MAP["case-not-submitted"],
+                    id=case.id,
+                    suite=case.suite,
+                )
+                attempt_by_index_map[index] = SkillBehaviorCaseAttempt(failure=failure, result=None)
+                continue
+            try:
+                future = executor.submit(
+                    _case_evaluate,
+                    case,
+                    invocation_config=invocation_config,
+                    plugin_source_binding_by_name_map=plugin_source_binding_by_name_map,
+                )
+            except Exception:
+                failure = SkillBehaviorCaseFailure(
+                    codex_usage_generation=None,
+                    codex_usage_judge=None,
+                    error_code="case-submission-failed",
+                    error_message=_CASE_FAILURE_MESSAGE_BY_CODE_MAP["case-submission-failed"],
+                    id=case.id,
+                    suite=case.suite,
+                )
+                attempt_by_index_map[index] = SkillBehaviorCaseAttempt(failure=failure, result=None)
+                submission_stopped = True
+                continue
             future_by_index_map[future] = index
         for future in as_completed(future_by_index_map):
-            result = future.result()
-            result_by_index_map[future_by_index_map[future]] = result
-            _result_print(result)
-    return [result_by_index_map[index] for index in range(len(case_list))]
+            index = future_by_index_map[future]
+            case = case_list[index]
+            try:
+                result = future.result()
+            except SkillBehaviorCaseEvaluationError as error:
+                failure = error.failure
+                attempt_by_index_map[index] = SkillBehaviorCaseAttempt(failure=failure, result=None)
+            except Exception:
+                failure = SkillBehaviorCaseFailure(
+                    codex_usage_generation=None,
+                    codex_usage_judge=None,
+                    error_code="case-internal-failure",
+                    error_message=_CASE_FAILURE_MESSAGE_BY_CODE_MAP["case-internal-failure"],
+                    id=case.id,
+                    suite=case.suite,
+                )
+                attempt_by_index_map[index] = SkillBehaviorCaseAttempt(failure=failure, result=None)
+            else:
+                attempt_by_index_map[index] = SkillBehaviorCaseAttempt(failure=None, result=result)
+    evaluation_attempt = SkillBehaviorEvaluationAttempt(
+        case_attempt_list=tuple(attempt_by_index_map[index] for index in range(len(case_list)))
+    )
+    try:
+        for attempt in evaluation_attempt.case_attempt_list:
+            if attempt.failure is not None:
+                failure = attempt.failure
+                print(
+                    f"ERROR {failure.suite}:{failure.id}: {failure.error_code}: {failure.error_message}",
+                    flush=True,
+                )
+            elif attempt.result is not None:
+                _result_print(attempt.result)
+    except OSError, ValueError:
+        pass
+    return evaluation_attempt
 
 
 def main(argv_list: Sequence[str] | None = None) -> int:
@@ -1701,7 +2921,7 @@ def main(argv_list: Sequence[str] | None = None) -> int:
                 print(f"{case.suite}:{case.id}")
             return 0
         standard_codex_home = Path(_standard_codex_process_environment_get()["HOME"]) / ".codex"
-        _preinstalled_plugin_source_binding_validate(
+        plugin_source_binding_by_name_map = _preinstalled_plugin_source_binding_validate(
             case_list=case_list,
             marketplace_path_list=args.plugin_marketplace_path_list,
             plugin_selector_list=args.plugin_selector_list,
@@ -1712,11 +2932,27 @@ def main(argv_list: Sequence[str] | None = None) -> int:
             model=args.model,
             reasoning_effort=args.reasoning_effort,
         )
-        result_list = _case_list_evaluate(
+        evaluation_attempt = _case_list_evaluate(
             case_list,
             concurrency=args.concurrency,
             invocation_config=invocation_config,
+            plugin_source_binding_by_name_map=plugin_source_binding_by_name_map,
         )
+        try:
+            _project_evaluation_binding_list_validate(case_list)
+        except SkillBehaviorEvalError:
+            evaluation_attempt = evaluation_attempt.project_binding_drift_get()
+        try:
+            _plugin_source_binding_by_name_map_validate(plugin_source_binding_by_name_map)
+        except SkillBehaviorEvalError:
+            evaluation_attempt = evaluation_attempt.provider_binding_drift_get()
+        if evaluation_attempt.have_failure():
+            non_acceptance_payload = evaluation_attempt.non_acceptance_payload_get(invocation_config)
+            if args.output is not None:
+                _result_output_publish(args.output, non_acceptance_payload)
+            print(f"evaluation_failure_count={non_acceptance_payload['failure_count']}")
+            return 2
+        result_list = evaluation_attempt.result_list_get()
         result_payload = _result_payload_get(
             invocation_config=invocation_config,
             result_list=result_list,
