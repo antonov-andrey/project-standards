@@ -719,6 +719,127 @@ def test_runner_revalidates_provider_binding_before_publication(
     assert payload["case_usage_list"][0]["codex_usage_judge"] == _codex_usage_payload(2)
 
 
+@pytest.mark.parametrize("drift_kind", ["marketplace-name", "plugin-source"])
+def test_runner_rejects_marketplace_declaration_drift_before_publication(
+    drift_kind: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Publication reproof compares the retained marketplace declaration.
+
+    Args:
+        drift_kind: Marketplace identity or selected plugin-source drift.
+        monkeypatch: Pytest mutation fixture.
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    corpus_path = tmp_path / "skill_behavior_eval/corpus-v1.json"
+    corpus_path.parent.mkdir()
+    _corpus_write(corpus_path, expected_skill_list=[], forbidden_skill_list=[])
+    output_path = tmp_path / "non-acceptance.json"
+    plugin_source_binding_by_name_map = _plugin_source_binding_by_name_map_create(
+        module,
+        tmp_path,
+        {"project-standards": []},
+    )
+    result = module.SkillBehaviorCaseResult(
+        activated_skill_list=(),
+        codex_usage_generation=module.CodexUsage(**_codex_usage_payload()),
+        codex_usage_judge=module.CodexUsage(**_codex_usage_payload(2)),
+        forbidden_activated_skill_list=(),
+        id="case-a",
+        missing_expected_skill_list=(),
+        passed=True,
+        response="Read-only response.",
+        semantic_invariant_result_list=(),
+        suite="provider",
+    )
+    evaluation_attempt = module.SkillBehaviorEvaluationAttempt(
+        case_attempt_list=(module.SkillBehaviorCaseAttempt(failure=None, result=result),)
+    )
+
+    def _case_list_evaluate(*_args: Any, **_kwargs: Any) -> Any:
+        """Drift the manifest after judging and before publication."""
+
+        _marketplace_manifest_drift(
+            plugin_source_binding_by_name_map["project-standards"],
+            drift_kind=drift_kind,
+        )
+        return evaluation_attempt
+
+    monkeypatch.setattr(module, "_standard_codex_process_environment_get", lambda: {"HOME": str(tmp_path)})
+    monkeypatch.setattr(
+        module,
+        "_preinstalled_plugin_source_binding_validate",
+        lambda **_kwargs: plugin_source_binding_by_name_map,
+    )
+    monkeypatch.setattr(module, "_case_list_evaluate", _case_list_evaluate)
+
+    return_code = module.main(["--corpus", str(corpus_path), "--output", str(output_path)])
+
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert return_code == 2
+    assert payload["case_usage_list"][0]["error_code"] == "provider-binding-drift"
+    assert payload["case_usage_list"][0]["codex_usage_generation"] == _codex_usage_payload()
+    assert payload["case_usage_list"][0]["codex_usage_judge"] == _codex_usage_payload(2)
+
+
+@pytest.mark.parametrize("replacement_kind", ["symbolic", "non-git", "different-worktree"])
+def test_runner_rejects_evaluated_project_replacement_before_publication(
+    monkeypatch: pytest.MonkeyPatch,
+    replacement_kind: str,
+    tmp_path: Path,
+) -> None:
+    """Publication reproof converts every project replacement to non-acceptance.
+
+    Args:
+        monkeypatch: Pytest mutation fixture.
+        replacement_kind: Replacement owner shape.
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    project_path = tmp_path / "evaluated-project"
+    corpus_path = project_path / "skill_behavior_eval/corpus-v1.json"
+    corpus_path.parent.mkdir(parents=True)
+    _corpus_write(corpus_path, expected_skill_list=[], forbidden_skill_list=[])
+    output_path = tmp_path / "non-acceptance.json"
+    result = module.SkillBehaviorCaseResult(
+        activated_skill_list=(),
+        codex_usage_generation=module.CodexUsage(**_codex_usage_payload()),
+        codex_usage_judge=module.CodexUsage(**_codex_usage_payload(2)),
+        forbidden_activated_skill_list=(),
+        id="case-a",
+        missing_expected_skill_list=(),
+        passed=True,
+        response="Read-only response.",
+        semantic_invariant_result_list=(),
+        suite="provider",
+    )
+    evaluation_attempt = module.SkillBehaviorEvaluationAttempt(
+        case_attempt_list=(module.SkillBehaviorCaseAttempt(failure=None, result=result),)
+    )
+
+    def _case_list_evaluate(*_args: Any, **_kwargs: Any) -> Any:
+        """Replace the evaluated project after judging and before publication."""
+
+        _evaluated_project_replace(project_path, replacement_kind=replacement_kind)
+        return evaluation_attempt
+
+    monkeypatch.setattr(module, "_standard_codex_process_environment_get", lambda: {"HOME": str(tmp_path)})
+    monkeypatch.setattr(module, "_preinstalled_plugin_source_binding_validate", lambda **_kwargs: {})
+    monkeypatch.setattr(module, "_case_list_evaluate", _case_list_evaluate)
+
+    return_code = module.main(["--corpus", str(corpus_path), "--output", str(output_path)])
+
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert return_code == 2
+    assert payload["case_usage_list"][0]["error_code"] == "project-binding-drift"
+    assert payload["case_usage_list"][0]["codex_usage_generation"] == _codex_usage_payload()
+    assert payload["case_usage_list"][0]["codex_usage_judge"] == _codex_usage_payload(2)
+
+
 def _plugin_source_path_create(
     root: Path,
     plugin_name: str,
@@ -771,6 +892,17 @@ def _plugin_source_binding_by_name_map_create(
     for plugin_name, skill_name_list in skill_name_list_by_plugin_name_map.items():
         marketplace_worktree_root = root / f"marketplace-{plugin_name}"
         _repository_create(marketplace_worktree_root)
+        marketplace_name = f"{plugin_name}-marketplace"
+        plugin_source_declaration = {
+            "name": plugin_name,
+            "source": {"source": "local", "path": f"./plugins/{plugin_name}"},
+        }
+        marketplace_manifest_path = marketplace_worktree_root / ".agents/plugins/marketplace.json"
+        marketplace_manifest_path.parent.mkdir(parents=True)
+        marketplace_manifest_path.write_text(
+            json.dumps({"name": marketplace_name, "plugins": [plugin_source_declaration]}) + "\n",
+            encoding="utf-8",
+        )
         source_path = _plugin_source_path_create(
             marketplace_worktree_root / f"plugins/{plugin_name}",
             plugin_name,
@@ -784,7 +916,14 @@ def _plugin_source_binding_by_name_map_create(
         plugin_source_binding_by_name_map[plugin_name] = module.PluginSourceBinding(
             cache_path=cache_path,
             file_sha256_by_relative_path_map=module._plugin_file_sha256_by_relative_path_map_get(source_path),
+            marketplace_manifest_path=marketplace_manifest_path,
+            marketplace_name=marketplace_name,
             marketplace_worktree_root=marketplace_worktree_root.resolve(),
+            plugin_source_declaration_json=json.dumps(
+                plugin_source_declaration,
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
             source_path=source_path,
         )
     return plugin_source_binding_by_name_map
@@ -958,12 +1097,17 @@ def test_judge_prompt_evaluates_real_mutations_as_read_only_proposed_behavior(
     """The judge cannot demand mutations that the generation sandbox explicitly forbids."""
 
     module = _module_load()
+    _repository_create(tmp_path)
     case = module.SkillBehaviorCase(
         corpus_path=tmp_path / "corpus-v1.json",
         expected_skill_list=("project-standards:project-foundation",),
         forbidden_skill_list=(),
         id="mutation-contract",
         prompt="Atomically replace the validated destination.",
+        project_evaluation_binding=module._project_evaluation_binding_get(
+            tmp_path.resolve(),
+            working_directory_mode="same-branch",
+        ),
         semantic_invariant_list=(
             module.SemanticInvariant(
                 id="atomic-replacement",
@@ -1049,6 +1193,12 @@ def test_corpus_load_resolves_working_directory(tmp_path: Path) -> None:
 
     assert len(case_list) == 1
     assert case_list[0].working_directory == repository.resolve()
+    binding = case_list[0].project_evaluation_binding
+    assert binding.working_directory == repository.resolve()
+    assert binding.worktree_root == repository.resolve()
+    assert binding.git_common_directory == (repository / ".git").resolve()
+    assert binding.branch_ref == "refs/heads/main"
+    assert binding.working_directory_mode == "same-branch"
     assert case_list[0].semantic_invariant_list[0].id == "bounded"
 
 
@@ -2071,6 +2221,10 @@ def test_project_local_skill_rejects_unrepaired_moved_linked_worktree(tmp_path: 
         "---\nname: local-review\ndescription: Deterministic local test skill.\n---\n",
         encoding="utf-8",
     )
+    project_evaluation_binding = module._project_evaluation_binding_get(
+        linked_worktree.resolve(),
+        working_directory_mode="same-branch",
+    )
     moved_worktree = tmp_path / "moved-worktree"
     linked_worktree.rename(moved_worktree)
     case = module.SkillBehaviorCase(
@@ -2079,6 +2233,7 @@ def test_project_local_skill_rejects_unrepaired_moved_linked_worktree(tmp_path: 
         forbidden_skill_list=(),
         id="case-a",
         prompt="Review one Python function.",
+        project_evaluation_binding=project_evaluation_binding,
         semantic_invariant_list=(module.SemanticInvariant(id="bounded", text="The response remains read-only."),),
         suite="provider",
         working_directory=moved_worktree,
@@ -2257,6 +2412,189 @@ def test_case_evaluate_rejects_provider_binding_drift_between_stages(
     assert invocation_count == (2 if invocation_stage == "judge" else 1)
 
 
+def _marketplace_manifest_drift(binding: Any, *, drift_kind: str) -> None:
+    """Change one retained marketplace identity or selected source declaration.
+
+    Args:
+        binding: Exact provider source binding.
+        drift_kind: Marketplace-name or plugin-source drift.
+    """
+
+    payload = json.loads(binding.marketplace_manifest_path.read_text(encoding="utf-8"))
+    if drift_kind == "marketplace-name":
+        payload["name"] = "different-marketplace"
+    elif drift_kind == "plugin-source":
+        payload["plugins"][0]["source"]["path"] = "./plugins/different-source"
+    else:
+        raise AssertionError(f"Unsupported marketplace drift kind: {drift_kind}")
+    binding.marketplace_manifest_path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+
+@pytest.mark.parametrize("invocation_stage", ["generation", "judge"])
+@pytest.mark.parametrize("drift_kind", ["marketplace-name", "plugin-source"])
+def test_case_evaluate_rejects_marketplace_declaration_drift_between_stages(
+    drift_kind: str,
+    invocation_stage: str,
+    tmp_path: Path,
+) -> None:
+    """Every model-stage reproof compares the retained marketplace declaration.
+
+    Args:
+        drift_kind: Marketplace identity or selected plugin-source drift.
+        invocation_stage: Invocation after which the declaration changes.
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    corpus_path = tmp_path / "skill_behavior_eval/corpus-v1.json"
+    corpus_path.parent.mkdir()
+    _corpus_write(corpus_path)
+    case = module._corpus_case_list_load(corpus_path)[0]
+    plugin_source_binding_by_name_map = _plugin_source_binding_by_name_map_create(
+        module,
+        tmp_path,
+        {
+            "agent-workflows": ["code-audit"],
+            "project-standards": ["python-developer"],
+        },
+    )
+    invocation_count = 0
+
+    def _model_call(*_args: Any) -> Any:
+        """Return one valid result after applying the selected manifest drift."""
+
+        nonlocal invocation_count
+        invocation_count += 1
+        current_stage = "generation" if invocation_count == 1 else "judge"
+        if current_stage == invocation_stage:
+            _marketplace_manifest_drift(
+                plugin_source_binding_by_name_map["project-standards"],
+                drift_kind=drift_kind,
+            )
+        if current_stage == "generation":
+            return module.ModelInvocationResult(
+                payload={
+                    "activated_skill_list": ["project-standards:python-developer"],
+                    "response": "Read-only response.",
+                },
+                usage=module.CodexUsage(**_codex_usage_payload()),
+            )
+        return module.ModelInvocationResult(
+            payload={
+                "invariant_result_list": [
+                    {"id": "bounded", "passed": True, "reason": "The response remains read-only."}
+                ]
+            },
+            usage=module.CodexUsage(**_codex_usage_payload(2)),
+        )
+
+    with pytest.raises(module.SkillBehaviorCaseEvaluationError) as error_info:
+        module._case_evaluate(
+            case,
+            invocation_config=module.ModelInvocationConfig(
+                codex_bin="codex",
+                model="gpt-5.6-sol",
+                reasoning_effort="medium",
+            ),
+            plugin_source_binding_by_name_map=plugin_source_binding_by_name_map,
+            model_call=_model_call,
+        )
+
+    failure = error_info.value.failure
+    assert failure.error_code == f"{invocation_stage}-validation-failed"
+    assert failure.codex_usage_generation == module.CodexUsage(**_codex_usage_payload())
+    assert failure.codex_usage_judge == (
+        module.CodexUsage(**_codex_usage_payload(2)) if invocation_stage == "judge" else None
+    )
+    assert invocation_count == (2 if invocation_stage == "judge" else 1)
+
+
+def _evaluated_project_replace(project_path: Path, *, replacement_kind: str) -> None:
+    """Persistently replace one evaluated project with a foreign path owner.
+
+    Args:
+        project_path: Exact evaluated worktree root.
+        replacement_kind: Symbolic, non-Git, or different-worktree replacement.
+    """
+
+    original_project_path = project_path.with_name(f"{project_path.name}-original")
+    project_path.rename(original_project_path)
+    if replacement_kind == "symbolic":
+        project_path.symlink_to(original_project_path, target_is_directory=True)
+    elif replacement_kind == "non-git":
+        project_path.mkdir()
+    elif replacement_kind == "different-worktree":
+        _repository_create(project_path)
+    else:
+        raise AssertionError(f"Unsupported replacement kind: {replacement_kind}")
+
+
+@pytest.mark.parametrize("invocation_stage", ["generation", "judge"])
+@pytest.mark.parametrize("replacement_kind", ["symbolic", "non-git", "different-worktree"])
+def test_case_evaluate_rejects_evaluated_project_replacement_between_stages(
+    invocation_stage: str,
+    replacement_kind: str,
+    tmp_path: Path,
+) -> None:
+    """Generation and judge reproof reject every persistent project replacement.
+
+    Args:
+        invocation_stage: Invocation after which the evaluated project is replaced.
+        replacement_kind: Replacement owner shape.
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    project_path = tmp_path / "evaluated-project"
+    corpus_path = project_path / "skill_behavior_eval/corpus-v1.json"
+    corpus_path.parent.mkdir(parents=True)
+    _corpus_write(corpus_path, expected_skill_list=[], forbidden_skill_list=[])
+    case = module._corpus_case_list_load(corpus_path)[0]
+    invocation_count = 0
+
+    def _model_call(*_args: Any) -> Any:
+        """Return one valid result after the selected persistent replacement."""
+
+        nonlocal invocation_count
+        invocation_count += 1
+        current_stage = "generation" if invocation_count == 1 else "judge"
+        if current_stage == invocation_stage:
+            _evaluated_project_replace(project_path, replacement_kind=replacement_kind)
+        if current_stage == "generation":
+            return module.ModelInvocationResult(
+                payload={"activated_skill_list": [], "response": "Read-only response."},
+                usage=module.CodexUsage(**_codex_usage_payload()),
+            )
+        return module.ModelInvocationResult(
+            payload={
+                "invariant_result_list": [
+                    {"id": "bounded", "passed": True, "reason": "The response remains read-only."}
+                ]
+            },
+            usage=module.CodexUsage(**_codex_usage_payload(2)),
+        )
+
+    with pytest.raises(module.SkillBehaviorCaseEvaluationError) as error_info:
+        module._case_evaluate(
+            case,
+            invocation_config=module.ModelInvocationConfig(
+                codex_bin="codex",
+                model="gpt-5.6-sol",
+                reasoning_effort="medium",
+            ),
+            plugin_source_binding_by_name_map={},
+            model_call=_model_call,
+        )
+
+    failure = error_info.value.failure
+    assert failure.error_code == f"{invocation_stage}-validation-failed"
+    assert failure.codex_usage_generation == module.CodexUsage(**_codex_usage_payload())
+    assert failure.codex_usage_judge == (
+        module.CodexUsage(**_codex_usage_payload(2)) if invocation_stage == "judge" else None
+    )
+    assert invocation_count == (2 if invocation_stage == "judge" else 1)
+
+
 def test_activation_normalization_requires_one_unambiguous_provider_identity(
     tmp_path: Path,
 ) -> None:
@@ -2290,6 +2628,7 @@ def test_activation_normalization_requires_one_unambiguous_provider_identity(
         forbidden_skill_list=("provider-b:shared",),
         id=case.id,
         prompt=case.prompt,
+        project_evaluation_binding=case.project_evaluation_binding,
         semantic_invariant_list=case.semantic_invariant_list,
         suite=case.suite,
         working_directory=case.working_directory,
@@ -2323,6 +2662,19 @@ def test_project_local_skill_rejects_non_git_owner(tmp_path: Path) -> None:
         forbidden_skill_list=(),
         id="case-a",
         prompt="Review.",
+        project_evaluation_binding=module.ProjectEvaluationBinding(
+            branch_ref="refs/heads/main",
+            git_common_directory=tmp_path,
+            git_common_directory_device_number=tmp_path.stat().st_dev,
+            git_common_directory_inode_number=tmp_path.stat().st_ino,
+            working_directory=tmp_path,
+            working_directory_device_number=tmp_path.stat().st_dev,
+            working_directory_inode_number=tmp_path.stat().st_ino,
+            working_directory_mode="same-branch",
+            worktree_root=tmp_path,
+            worktree_root_device_number=tmp_path.stat().st_dev,
+            worktree_root_inode_number=tmp_path.stat().st_ino,
+        ),
         semantic_invariant_list=(),
         suite="provider",
         working_directory=tmp_path,
@@ -2352,6 +2704,7 @@ def test_case_list_evaluate_preserves_corpus_order(monkeypatch: pytest.MonkeyPat
         forbidden_skill_list=first_case.forbidden_skill_list,
         id="case-b",
         prompt=first_case.prompt,
+        project_evaluation_binding=first_case.project_evaluation_binding,
         semantic_invariant_list=first_case.semantic_invariant_list,
         suite=first_case.suite,
         working_directory=first_case.working_directory,
@@ -2434,6 +2787,7 @@ def test_case_list_evaluate_drains_all_futures_into_non_acceptance_record(
         forbidden_skill_list=first_case.forbidden_skill_list,
         id="case-b",
         prompt=first_case.prompt,
+        project_evaluation_binding=first_case.project_evaluation_binding,
         semantic_invariant_list=first_case.semantic_invariant_list,
         suite=first_case.suite,
         working_directory=first_case.working_directory,
@@ -2545,6 +2899,7 @@ def test_case_list_evaluate_drains_submitted_future_after_submission_failure(
             forbidden_skill_list=first_case.forbidden_skill_list,
             id=f"case-{case_number}",
             prompt=first_case.prompt,
+            project_evaluation_binding=first_case.project_evaluation_binding,
             semantic_invariant_list=first_case.semantic_invariant_list,
             suite=first_case.suite,
             working_directory=first_case.working_directory,
@@ -2764,10 +3119,27 @@ def test_activated_provider_manifest_rejects_duplicate_identity_key(tmp_path: Pa
         plugin_cache_path / ".codex-plugin/plugin.json",
     ):
         manifest_path.write_text(duplicate_manifest_text, encoding="utf-8")
+    plugin_source_declaration = {
+        "name": "project-standards",
+        "source": {"source": "local", "path": "./plugins/project-standards"},
+    }
+    marketplace_manifest_path = marketplace_worktree_root / ".agents/plugins/marketplace.json"
+    marketplace_manifest_path.parent.mkdir(parents=True)
+    marketplace_manifest_path.write_text(
+        json.dumps({"name": "provider-marketplace", "plugins": [plugin_source_declaration]}) + "\n",
+        encoding="utf-8",
+    )
     plugin_source_binding = module.PluginSourceBinding(
         cache_path=plugin_cache_path,
         file_sha256_by_relative_path_map=module._plugin_file_sha256_by_relative_path_map_get(plugin_source_path),
+        marketplace_manifest_path=marketplace_manifest_path,
+        marketplace_name="provider-marketplace",
         marketplace_worktree_root=marketplace_worktree_root.resolve(),
+        plugin_source_declaration_json=json.dumps(
+            plugin_source_declaration,
+            separators=(",", ":"),
+            sort_keys=True,
+        ),
         source_path=plugin_source_path,
     )
 
@@ -2821,6 +3193,30 @@ def test_preinstalled_plugin_binding_rejects_duplicate_manifest_keys(
     (marketplace_path / ".agents/plugins/marketplace.json").write_text(manifest_text, encoding="utf-8")
 
     with pytest.raises(module.SkillBehaviorEvalError, match="manifest is unavailable or invalid"):
+        module._preinstalled_plugin_source_binding_validate(
+            case_list=[],
+            marketplace_path_list=[marketplace_path],
+            plugin_selector_list=["project-standards@provider-marketplace"],
+            standard_codex_home=standard_codex_home,
+        )
+
+
+def test_preinstalled_plugin_binding_rejects_symlinked_marketplace_manifest(tmp_path: Path) -> None:
+    """The marketplace manifest must be one physical nonsymbolic file.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
+
+    module = _module_load()
+    marketplace_path, standard_codex_home = _plugin_binding_fixture_create(tmp_path)
+    marketplace_manifest_path = marketplace_path / ".agents/plugins/marketplace.json"
+    external_manifest_path = tmp_path / "external-marketplace.json"
+    external_manifest_path.write_bytes(marketplace_manifest_path.read_bytes())
+    marketplace_manifest_path.unlink()
+    marketplace_manifest_path.symlink_to(external_manifest_path)
+
+    with pytest.raises(module.SkillBehaviorEvalError, match="canonical physical nonsymbolic"):
         module._preinstalled_plugin_source_binding_validate(
             case_list=[],
             marketplace_path_list=[marketplace_path],
@@ -3057,11 +3453,14 @@ def test_case_evaluate_closes_invalid_utf8_stream_with_stage_usage(
     _corpus_write(corpus_path, expected_skill_list=[], forbidden_skill_list=[])
     case = module._corpus_case_list_load(corpus_path)[0]
     invocation_count = 0
+    real_subprocess_run = subprocess.run
 
     def _run(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[bytes]:
         """Write valid generation or invalid selected-stage output with exact usage."""
 
         nonlocal invocation_count
+        if command[0] == "git":
+            return real_subprocess_run(command, **_kwargs)
         invocation_count += 1
         current_stage = "generation" if invocation_count == 1 else "judge"
         output_path = Path(command[command.index("--output-last-message") + 1])
@@ -3199,6 +3598,7 @@ def test_non_acceptance_surfaces_redact_raw_codex_streams(
     case = module._corpus_case_list_load(corpus_path)[0]
     stdout_secret = "stdout-secret-sentinel"
     stderr_secret = "stderr-secret-sentinel"
+    real_subprocess_run = subprocess.run
 
     def _run(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[bytes]:
         """Return one nonzero process containing both stream sentinels.
@@ -3211,6 +3611,8 @@ def test_non_acceptance_surfaces_redact_raw_codex_streams(
             Simulated failed Codex process with exact usage.
         """
 
+        if command[0] == "git":
+            return real_subprocess_run(command, **_kwargs)
         event_list = [
             {"type": "item.completed", "text": stdout_secret},
             {"type": "turn.completed", "usage": _codex_usage_payload()},
@@ -3336,7 +3738,12 @@ def test_preinstalled_plugin_binding_accepts_exact_server_cache(tmp_path: Path) 
     )
 
     binding = plugin_source_binding_by_name_map["project-standards"]
+    assert binding.marketplace_manifest_path == marketplace_path / ".agents/plugins/marketplace.json"
+    assert binding.marketplace_name == "provider-marketplace"
     assert binding.marketplace_worktree_root == marketplace_path.resolve()
+    assert binding.plugin_source_declaration_json == (
+        '{"name":"project-standards","source":{"path":"./plugins/project-standards","source":"local"}}'
+    )
     assert binding.source_path == (marketplace_path / "plugins/project-standards").resolve()
     assert binding.cache_path == next(standard_codex_home.glob("plugins/cache/*/*/*")).resolve()
     assert binding.file_sha256_by_relative_path_map == module._plugin_file_sha256_by_relative_path_map_get(
@@ -3567,6 +3974,16 @@ def test_activated_provider_binding_rejects_mismatched_and_ambiguous_sources(tmp
             "agent-workflows",
             ["python-developer"],
         )
+        plugin_source_declaration = {
+            "name": "project-standards",
+            "source": {"source": "local", "path": "./plugins/agent-workflows"},
+        }
+        marketplace_manifest_path = marketplace_worktree_root / ".agents/plugins/marketplace.json"
+        marketplace_manifest_path.parent.mkdir(parents=True)
+        marketplace_manifest_path.write_text(
+            json.dumps({"name": "mismatched-marketplace", "plugins": [plugin_source_declaration]}) + "\n",
+            encoding="utf-8",
+        )
         cache_path = _plugin_source_path_create(
             tmp_path / "mismatched-provider-cache",
             "agent-workflows",
@@ -3578,14 +3995,32 @@ def test_activated_provider_binding_rejects_mismatched_and_ambiguous_sources(tmp
                 "project-standards": module.PluginSourceBinding(
                     cache_path=cache_path,
                     file_sha256_by_relative_path_map=module._plugin_file_sha256_by_relative_path_map_get(source_path),
+                    marketplace_manifest_path=marketplace_manifest_path,
+                    marketplace_name="mismatched-marketplace",
                     marketplace_worktree_root=marketplace_worktree_root.resolve(),
+                    plugin_source_declaration_json=json.dumps(
+                        plugin_source_declaration,
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    ),
                     source_path=source_path,
                 )
             },
         )
 
 
-@pytest.mark.parametrize("plugin_version", ["1", "01.0.0", "1.0.0/escape", "1.0.0+"])
+@pytest.mark.parametrize(
+    "plugin_version",
+    ["1", "01.0.0", "1.0.0/escape", "1.0.0+", "1.0.٠", "1.0.0-1٠"],
+    ids=[
+        "incomplete-core",
+        "leading-zero-core",
+        "path-escape",
+        "empty-build",
+        "mixed-unicode-core",
+        "mixed-unicode-prerelease",
+    ],
+)
 def test_preinstalled_plugin_binding_rejects_invalid_manifest_version(
     tmp_path: Path,
     plugin_version: str,
